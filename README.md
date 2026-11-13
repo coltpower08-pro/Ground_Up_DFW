@@ -25,8 +25,7 @@ Built with TypeScript, React, three.js and Vite. Hosted on Firebase (Hosting, Au
 2. **Sign-in.** Authentication > Get started > Sign-in method: turn on **Google** and **Email/Password**.
 3. **Database.** Firestore Database > Create database > Production mode > a US location (for example `nam5`).
 4. **Hosting.** Hosting > Get started, then click through; the deploy handles the rest.
-5. **Deploy key.** Google Cloud console > IAM & Admin > Service Accounts (same project) > Create service account named `github-deploy` with the roles **Firebase Admin**, **Service Usage Consumer** and **API Keys Viewer**. Open it > Keys > Add key > JSON.
-6. **GitHub secret.** This repo > Settings > Secrets and variables > Actions > New repository secret named `FIREBASE_SERVICE_ACCOUNT`; paste the entire JSON file. Then delete the downloaded file.
+5. **Deploy permission (keyless).** GitHub signs in to Google through Workload Identity Federation, so there is no key file. In the Google Cloud console for this project, open Cloud Shell and run `setup/keyless-deploy.sh` (paste its contents). It enables the needed APIs, creates the `github-deploy` service account with the Firebase Admin, Service Usage Consumer and API Keys Viewer roles, and lets only this repository act as that account.
 
 After that, every push to `main` goes live at `https://<project-id>.web.app` in a few minutes. Watch progress in the repo's **Actions** tab, or re-run a deploy there with **Run workflow**.
 

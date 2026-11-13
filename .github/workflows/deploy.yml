@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write # lets GitHub prove to Google which repo is deploying (no key file)
 
 concurrency:
   group: deploy
@@ -25,15 +26,13 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - name: Sign in to Google Cloud (keyless)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/110526487227/locations/global/workloadIdentityPools/github/providers/ground-up-repo
+          service_account: github-deploy@ground-up-dfw.iam.gserviceaccount.com
       - name: Publish to Firebase
-        env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
-          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then echo "::error::Add the FIREBASE_SERVICE_ACCOUNT secret in the repo's Settings > Secrets and variables > Actions."; exit 1; fi
           PROJECT=$(node -p "JSON.parse(require('fs').readFileSync('.firebaserc','utf8')).projects.default")
-          if [ "$PROJECT" = "YOUR-FIREBASE-PROJECT-ID" ]; then echo "::error::Put your Firebase project ID in .firebaserc."; exit 1; fi
-          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
-          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json"
-          node -e "const k=JSON.parse(require('fs').readFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS,'utf8')); console.log('Deploying as', k.client_email, 'from key for project', k.project_id)"
           npx --yes firebase-tools@latest deploy --only hosting,firestore --project "$PROJECT" --non-interactive --force
           echo "Live at https://$PROJECT.web.app" >> "$GITHUB_STEP_SUMMARY"
