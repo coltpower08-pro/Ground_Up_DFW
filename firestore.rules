@@ -1,0 +1,33 @@
+rules_version = '2';
+// Who can read and write what in the game's database.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // High scores: anyone can read the boards. Signed-in players can post their own scores, once, in the right shape.
+    // Nobody can edit or delete a posted score from the game (you can still remove one in the Firebase console).
+    match /scores/{id} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['uid', 'player', 'firm', 'difficulty', 'career', 'score', 'netWorth', 'lpProfit', 'dealsSold', 'years', 'how', 'at', 'year', 'month', 'week'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.at == request.time
+        && request.resource.data.player is string && request.resource.data.player.size() > 0 && request.resource.data.player.size() <= 24
+        && request.resource.data.firm is string && request.resource.data.firm.size() <= 32
+        && request.resource.data.difficulty in ['rookie', 'pro']
+        && request.resource.data.career in [10, 25, 0]
+        && request.resource.data.score is int && request.resource.data.score >= 0 && request.resource.data.score < 100000000
+        && request.resource.data.netWorth is number && request.resource.data.lpProfit is number
+        && request.resource.data.dealsSold is int && request.resource.data.years is number
+        && request.resource.data.how in ['complete', 'retired', 'bust']
+        && request.resource.data.year is string && request.resource.data.month is string && request.resource.data.week is string;
+      allow update, delete: if false;
+    }
+
+    // Cloud saves: one per player, readable and writable only by that player.
+    match /saves/{uid} {
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+      allow create, update: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.data is string && request.resource.data.data.size() < 1000000;
+    }
+  }
+}
