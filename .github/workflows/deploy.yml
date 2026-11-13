@@ -36,5 +36,5 @@ jobs:
       - name: Publish to Firebase
         run: |
           PROJECT=$(node -p "JSON.parse(require('fs').readFileSync('.firebaserc','utf8')).projects.default")
-          npx --yes firebase-tools@latest deploy --only hosting,firestore --project "$PROJECT" --non-interactive --force --debug
+          npx --yes firebase-tools@latest deploy --only hosting,firestore --project "$PROJECT" --non-interactive --force
           echo "Live at https://$PROJECT.web.app" >> "$GITHUB_STEP_SUMMARY"
