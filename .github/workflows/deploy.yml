@@ -31,8 +31,10 @@ jobs:
         with:
           workload_identity_provider: projects/110526487227/locations/global/workloadIdentityPools/github/providers/ground-up-repo
           service_account: github-deploy@ground-up-dfw.iam.gserviceaccount.com
+      - name: Check the Google sign-in works
+        run: gcloud auth print-access-token --quiet > /dev/null && echo "Signed in to Google as github-deploy"
       - name: Publish to Firebase
         run: |
           PROJECT=$(node -p "JSON.parse(require('fs').readFileSync('.firebaserc','utf8')).projects.default")
-          npx --yes firebase-tools@latest deploy --only hosting,firestore --project "$PROJECT" --non-interactive --force
+          npx --yes firebase-tools@latest deploy --only hosting,firestore --project "$PROJECT" --non-interactive --force --debug
           echo "Live at https://$PROJECT.web.app" >> "$GITHUB_STEP_SUMMARY"
