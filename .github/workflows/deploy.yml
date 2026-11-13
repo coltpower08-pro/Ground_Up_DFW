@@ -34,5 +34,6 @@ jobs:
           if [ "$PROJECT" = "YOUR-FIREBASE-PROJECT-ID" ]; then echo "::error::Put your Firebase project ID in .firebaserc."; exit 1; fi
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
           export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json"
+          node -e "const k=JSON.parse(require('fs').readFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS,'utf8')); console.log('Deploying as', k.client_email, 'from key for project', k.project_id)"
           npx --yes firebase-tools@latest deploy --only hosting,firestore --project "$PROJECT" --non-interactive --force
           echo "Live at https://$PROJECT.web.app" >> "$GITHUB_STEP_SUMMARY"
