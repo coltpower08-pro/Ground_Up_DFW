@@ -13,6 +13,8 @@ export interface ScoreEntry {
   netWorth: number;
   lpProfit: number;
   dealsSold: number;
+  /** Final place among the seven firms, 1 = first. Missing on scores posted before rivals existed. */
+  rank?: number;
   years: number; // in-game years played
   how: 'complete' | 'retired' | 'bust';
   at: number; // real-world time posted, ms

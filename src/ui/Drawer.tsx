@@ -5,6 +5,7 @@ import { DISTRICTS, roadOf, siteDataOf } from '../content/world';
 import { capFor, districtRent, leaseUpBase, leaseUpFor, vacancyFor } from '../engine/market';
 import { ACRE_RANGE, ATTORNEY_FEE, ENT, IOS, MF_UNIT_SF, OUTREACH_COST, PERM, PRODUCTS, RENO, REPORTS, SPEC, TERMS, TYPE_SHORT } from '../engine/params';
 import { askPrice, computeProforma, dealTerms, entitlementKind, explainGrade, existingLeased, existingMarketNoi, getNpc, getParcel, sensitivity, usableAcres } from '../engine/proforma';
+import { circling, competingFor } from '../engine/rivals';
 import * as S from '../engine/sim';
 import type { Deal, DealType, Game, Parcel, Proforma, ReportId } from '../engine/types';
 import { bps, dateStr, daysToWords, money, mult, pct } from './format';
@@ -145,7 +146,7 @@ function ParcelPanel({ g, p }: { g: Game; p: Parcel }) {
   const short = p.name.replace(/ \(.*\)/, '');
 
   if (p.status !== 'available') {
-    return <div className="p-5"><h2 className="display text-[26px] font-semibold leading-tight">{short}</h2><p className="mt-2 text-ink2">{p.status === 'rival' ? 'A rival developer bought this site.' : 'This site is no longer on the market.'}</p></div>;
+    return <div className="p-5"><h2 className="display text-[26px] font-semibold leading-tight">{short}</h2><p className="mt-2 text-ink2">{p.status === 'rival' ? `${g.rivals?.find((r) => r.id === p.rivalId)?.name ?? 'A rival developer'} bought this site.` : 'This site is no longer on the market.'}</p></div>;
   }
   const pf = S.previewProforma(g, p.id, type, price);
   const odds = S.offerOdds(g, p, price);
@@ -166,6 +167,7 @@ function ParcelPanel({ g, p }: { g: Game; p: Parcel }) {
         <p className="mt-1 text-[13.5px] text-ink2">{p.blurb}</p>
       </header>
       <div className="scroll flex-1 px-5 py-4">
+        {circling(g, p.id) && <div className="mb-3 rounded-xl border border-accent/50 bg-accent/10 p-3 text-[13px]"><span className="font-semibold">{circling(g, p.id)!.name} is circling this site.</span> They will likely buy it within {Math.max(1, circling(g, p.id)!.eye!.until - Math.floor(g.day / 30))} month{circling(g, p.id)!.eye!.until - Math.floor(g.day / 30) > 1 ? 's' : ''}. The seller knows it, so low offers are less likely to land. Tie it up first and it counts as a win over a rival.</div>}
         {ex && (
           <>
             <div className="grid grid-cols-2 gap-x-5">
@@ -450,6 +452,7 @@ function LeasingBlock({ g, d, note }: { g: Game; d: Deal; note: string }) {
   return (
     <Section title="Leasing">
       <Row label="Market rent today" value={`${money(mkt)}/yr (${unit})`} />
+      {competingFor(g, d.type, getParcel(g, d.parcelId).district).length > 0 && <p className="my-1 rounded-lg bg-accent/10 px-2 py-1.5 text-[12.5px]">{competingFor(g, d.type, getParcel(g, d.parcelId).district).map((r) => r.name).join(' and ')} {competingFor(g, d.type, getParcel(g, d.parcelId).district).length > 1 ? 'have' : 'has'} competing space leasing in this district. Tenants have a choice, so prospects arrive more slowly.</p>}
       {d.type === 'mf' && <Row label="Occupancy" value={pct(d.occ, 0)} />}
       <div className="mt-1.5 text-[13px] font-medium">Asking rent</div>
       <Seg value={d.askFactor} onChange={(v) => act((gg) => S.setAsk(gg, d.id, v))} options={[

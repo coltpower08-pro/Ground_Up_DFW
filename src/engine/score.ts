@@ -2,6 +2,7 @@
 // Balanced on purpose: getting rich yourself, paying your investors, picking good deals, and growing the firm all count.
 import { payOut } from './finance';
 import { COMMON } from './params';
+import { CONTESTED_POINTS, LEAGUE_SIZE, rankBonusPct, rankOf } from './rivals';
 import { estimateValue } from './sim';
 import type { Game } from './types';
 
@@ -17,6 +18,8 @@ export interface ScoreBreakdown {
   /** What investors got back beyond what they put in, counting properties still owned at today's value. */
   lpProfit: number;
   parts: { key: string; label: string; detail: string; points: number }[];
+  /** Place on the league table against the rival firms, 1 = first, and how many firms are on it. */
+  rank: number; leagueSize: number;
 }
 
 /** What a property would pay the firm and its investors if sold today at estimated value, after the loan and selling costs. */
@@ -55,7 +58,11 @@ export function scoreGame(g: Game): ScoreBreakdown {
     { key: 'milestones', label: 'Milestones', detail: `${g.achievements.length} reached · 300 each`, points: g.achievements.length * 300 },
     { key: 'reputation', label: 'Reputation', detail: `Average standing ${Math.round(repAvg)} of 100 (started at 36)`, points: Math.round((repAvg - 36) * 15) },
   ];
-  return { total: Math.max(0, parts.reduce((s, p) => s + p.points, 0)), netWorth, lpProfit, parts };
+  // measured against the competition: a bonus for where the firm stands in the league, and points for every head-to-head win
+  const base = Math.max(0, parts.reduce((s, p) => s + p.points, 0)), rank = g.rivals ? rankOf(g, netWorth) : LEAGUE_SIZE, pctBonus = g.rivals ? rankBonusPct(rank) : 0, won = g.contested?.won ?? 0;
+  const ord = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th'][rank] ?? `${rank}th`;
+  parts.push({ key: 'league', label: 'Against the competition', detail: `${ord} of ${LEAGUE_SIZE} firms by net worth · ${pctBonus ? `+${Math.round(pctBonus * 100)}% of the points above` : 'no bonus below 3rd'}${won ? ` · ${won} site${won > 1 ? 's and tenants' : ' or tenant'} won from rivals, ${CONTESTED_POINTS} each` : ''}`, points: Math.round(base * pctBonus) + won * CONTESTED_POINTS });
+  return { total: Math.max(0, parts.reduce((s, p) => s + p.points, 0)), netWorth, lpProfit, parts, rank, leagueSize: LEAGUE_SIZE };
 }
 
 /** In-game years played, to one decimal. */

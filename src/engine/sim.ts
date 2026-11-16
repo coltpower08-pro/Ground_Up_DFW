@@ -4,7 +4,8 @@ import { ACHIEVEMENTS } from '../content/achievements';
 import { siteDataOf } from '../content/world';
 import { demandFor, freshTypes, stepMarket } from './market';
 import { WORLD_EVENTS } from '../content/events';
-import { BUYERS, MAP_REV, RIVALS, TENANTS, makeNpcs, makeParcels } from '../content/world';
+import { BUYERS, MAP_REV, TENANTS, makeNpcs, makeParcels } from '../content/world';
+import { circling, competingFor, freshRivals, sellingNow, stepRivals, type RivalHooks } from './rivals';
 import { accrue, contributeTier, denseFlows, irrAnnual, payOut, sizePermLoan } from './finance';
 import { ATTORNEY_FEE, COMMON, CYCLE, CYCLE_NEXT, ENT, IOS, MF_FULL, OUTREACH_COST, PERM, PRODUCTS, REPORTS, SPEC, STAFF, TERMS, TYPE_LABEL, ACRE_RANGE } from './params';
 import { askPrice, baseCap, computeProforma, districtOf, entitlementKind, explainGrade, existingLeased, existingMarketNoi, getNpc, getParcel, makeAcct, usableAcres } from './proforma';
@@ -30,10 +31,26 @@ function initExisting(g: Game, only?: (p: Parcel) => boolean) {
   for (const p of g.parcels) if (p.existing && (!only || only(p))) for (const l of p.existing.leases) l.rentAnnual = round(existingMarketNoi(g, p) * l.share * l.factor, 100);
 }
 
+const rivalHooks: RivalHooks = {
+  underwrite(g, p, t) {
+    const d = blankDeal(g, p, t, askPrice(g, p), 'rival'), pf = computeProforma(g, d);
+    return pf.lenderId ? { cost: pf.budget.total, value: pf.value, grade: pf.score } : null;
+  },
+  news: (g, text, tone) => news(g, text, tone),
+};
+
 /** Bring a save from an earlier build up to date. */
 export function migrate(g: Game): Game {
   g.achievements ??= []; g.unlocked ??= ['ios', 'spec']; g.career ??= 0; g.player ??= '';
   if (!g.market.idx) Object.assign(g.market, freshTypes());
+  g.contested ??= { won: 0, lost: 0 };
+  if (!g.rivals) {
+    // a save from before rival firms existed: give them the years they would have had, off the map
+    g.rivals = freshRivals(); g.rivalRng = (g.seed ^ 0x5bd1e995) | 0;
+    const today = g.day;
+    for (let m = 1; m <= Math.floor(today / DAYS_PER_MONTH); m++) { g.day = m * DAYS_PER_MONTH; stepRivals(g, rivalHooks, true); }
+    g.day = today;
+  }
   for (const d of g.deals) { d.acq ??= false; d.reno ??= 'asis'; d.occ ??= 0; if (d.uw) { d.uw.leaseUp ??= d.type === 'ios' ? 3 : 6; d.uw.holdMonths ??= 6; } }
   const all = makeParcels();
   if ((g.map ?? 1) < MAP_REV) {
@@ -54,6 +71,7 @@ export function migrate(g: Game): Game {
 
 export function newGame(seed = Date.now() % 2147483647, firmName = 'Your Development Co.', difficulty: Game['difficulty'] = 'rookie', career: Game['career'] = 0, player = ''): Game {
   const g: Game = {
+    rivals: freshRivals(), rivalRng: (seed ^ 0x5bd1e995) | 0, contested: { won: 0, lost: 0 },
     version: 3, map: MAP_REV, seed, rng: seed, difficulty, firmName, day: 0, cash: 450000, attention: 4,
     rep: { investors: 35, lenders: 35, city: 35, brokers: 45, tenants: 30 }, trackRecord: 0,
     market: { iosRent: 4100, indRent: 8.1, iosCap: 0.0765, indCap: 0.0625, landIndex: 1, costIndex: 1, baseRate: 0.045, ...freshTypes() },
@@ -162,7 +180,8 @@ export function estimateValue(g: Game, d: Deal): { value: number; cap: number; n
 export function offerOdds(g: Game, p: Parcel, price: number): number {
   if (p.counterPrice && price >= p.counterPrice) return 1;
   const disc = 1 - price / askPrice(g, p);
-  return clamp(0.95 - disc * 5 + (getNpc(g, 'dusty').rel - 50) / 200 + (p.offMarket ? 0.05 : 0), 0.02, 0.98);
+  // a seller with a second buyer circling has less reason to take a low offer
+  return clamp(0.95 - disc * (circling(g, p.id) ? 7.5 : 5) + (getNpc(g, 'dusty').rel - 50) / 200 + (p.offMarket ? 0.05 : 0), 0.02, 0.98);
 }
 
 export function visibleParcels(g: Game): Parcel[] {
@@ -221,6 +240,8 @@ export function makeOffer(g: Game, parcelId: string, type: DealType, price: numb
   g.deals.push(d);
   log(g, d, `Under contract at ${$(price)}. Earnest money ${$(earnest)} posted.`);
   news(g, `${p.name} is under contract at ${$(price)}.`, 'good');
+  const other = circling(g, parcelId);
+  if (other) { other.eye = null; g.contested = g.contested ?? { won: 0, lost: 0 }; g.contested.won++; news(g, `You tied up ${p.name.replace(/ \(.*\)/, '')} before ${other.name} could move on it.`, 'good'); }
   unlock(g, 'loi', 'earnest', 'dd', 'floodplain', 'frontage', 'interchange', 'hbu', 'residual', 'hurdle', 'vacancy', 'absorption');
   unlock(g, ...(type === 'retail' ? ['traffic', 'rooftops', 'anchor', 'hardcorner'] : type === 'office' ? ['officejobs', 'classa'] : type === 'mf' ? ['renters', 'schools'] : ['laborpool']));
   bumpRep(g, 'brokers', 1);
@@ -470,13 +491,14 @@ export function closeDeal(g: Game, id: string): Result {
 
 export function setAsk(g: Game, id: string, f: number) { getDeal(g, id).askFactor = f; }
 
-function arrivalOdds(g: Game, d: Deal): number {
+export function arrivalOdds(g: Game, d: Deal): number {
   const askF = d.askFactor <= 0.95 ? 1.4 : d.askFactor <= 1 ? 1 : d.askFactor <= 1.05 ? 0.6 : 0.3;
   const quality = d.type === 'ios' ? IOS.security[d.ios.security].demand : d.spec.extras ? SPEC.extrasDemand : 1;
   const base = d.type === 'ios' ? IOS.arrival : d.type === 'spec' ? SPEC.arrival : PRODUCTS[d.type].arrival;
   const pre = d.phase === 'construction' && !d.acq ? 0.5 : 1;
   const cyc = g.difficulty === 'pro' ? CYCLE[g.cycle.phase].demand : 1;
-  return clamp(base * demandFor(g, getParcel(g, d.parcelId), d.type) * askF * quality * pre * cyc * (g.staff.leasing ? 1.3 : 1) * (0.7 + getNpc(g, 'priya').rel * 0.006) * (0.85 + g.rep.tenants / 200), 0.02, 0.95);
+  const crowd = Math.max(0.6, 1 - 0.15 * competingFor(g, d.type, getParcel(g, d.parcelId).district).length); // rivals leasing the same product nearby
+  return clamp(base * crowd * demandFor(g, getParcel(g, d.parcelId), d.type) * askF * quality * pre * cyc * (g.staff.leasing ? 1.3 : 1) * (0.7 + getNpc(g, 'priya').rel * 0.006) * (0.85 + g.rep.tenants / 200), 0.02, 0.95);
 }
 
 function makeProspect(g: Game, d: Deal): Prospect {
@@ -521,6 +543,8 @@ function signLease(g: Game, d: Deal) {
   const start = d.phase === 'construction' && !d.acq ? g.day + Math.max(0, d.con!.daysTotal - d.con!.daysDone) : g.day;
   d.leases.push({ tenant: p.tenant, credit: p.credit, rentAnnual: p.rentAnnual, escal: p.escal, termMonths: p.termMonths, freeMonths: p.freeMonths, ti: p.ti, lc: p.lc, startDay: start, share: p.share });
   d.prospect = null;
+  const beaten = competingFor(g, d.type, getParcel(g, d.parcelId).district)[0];
+  if (beaten && !d.beatRival) { d.beatRival = true; g.contested = g.contested ?? { won: 0, lost: 0 }; g.contested.won++; news(g, `${p.tenant} chose ${d.name} over ${beaten.name}'s competing space.`, 'good'); }
   pay(g, d, p.ti + p.lc);
   if (d.phase === 'leasing' && fullyLeased(d)) d.phase = 'operations';
   bumpRep(g, 'tenants', 2); getNpc(g, 'priya').rel = clamp(getNpc(g, 'priya').rel + 2, 0, 100);
@@ -542,7 +566,8 @@ export function listForSale(g: Game, id: string): Result {
 
 function callForOffers(g: Game, d: Deal) {
   const { value, cap } = estimateValue(g, d);
-  const mk = (kind: Bid['kind'], f: number, note: string): Bid => ({ buyer: pick(g, BUYERS[kind]), kind, price: round(value * f * between(g, 0.985, 1.015), 5000), note });
+  const also = sellingNow(g, d.type)[0], split = also ? 0.985 : 1; // buyers with a second choice bid a little less
+  const mk = (kind: Bid['kind'], f: number, note: string): Bid => ({ buyer: pick(g, BUYERS[kind]), kind, price: round(value * f * split * between(g, 0.985, 1.015), 5000), note });
   const bids = [
     mk('institution', 0.97, 'All cash. Has never failed to close.'),
     mk('private', 1.0, '1031 exchange buyer. Motivated, but known to ask for a price cut late.'),
@@ -550,7 +575,7 @@ function callForOffers(g: Game, d: Deal) {
   ];
   decide(g, {
     kind: 'bids', dealId: d.id, title: `Offers are in on ${d.name}`,
-    body: `Three buyers bid. The market cap rate for this lease is about ${(cap * 100).toFixed(2)}%.`,
+    body: `Three buyers bid. The market cap rate for this lease is about ${(cap * 100).toFixed(2)}%.${also ? ` ${also.name} has a similar property for sale right now, so buyers had a choice and bid a little less.` : ''}`,
     advisor: { who: 'broker', line: 'Price is only one term. Ask yourself which of these buyers actually shows up at closing.' },
     data: { bids },
     options: [
@@ -978,10 +1003,8 @@ function monthClose(g: Game) {
   g.marketHistory.push({ m, iosRent: mk.iosRent, indRent: mk.indRent, retail: mk.idx.retail, office: mk.idx.office, mf: mk.idx.mf });
   if (g.marketHistory.length > 120) g.marketHistory.shift();
   if (m > 2 && chance(g, 0.07)) { const e = pick(g, WORLD_EVENTS); e.apply(g); news(g, e.text, e.tone); }
-  if (m > 5 && chance(g, 0.12)) {
-    const open = g.parcels.filter((p) => p.status === 'available' && !['bluemound', 'northlake10'].includes(p.id));
-    if (open.length > 70) { const p = pick(g, open); p.status = 'rival'; news(g, `${pick(g, RIVALS)} bought ${p.name.replace(/ \(.*\)/, '')}.`, 'info'); }
-  }
+  stepRivals(g, rivalHooks);
+  if (m === 6) unlock(g, 'league', 'competingsupply');
   if (g.career && m >= g.career * 12) {
     g.over = true;
     g.ending = { how: 'complete', text: `${g.career} years are up. ${g.firmName} closes the books on ${g.trackRecord} completed deal${g.trackRecord === 1 ? '' : 's'}. Properties you still own are counted at what they would sell for today.` };

@@ -22,7 +22,7 @@ describe('career score', () => {
     const s = scoreGame(S.newGame(7));
     expect(s.total).toBe(0);
     expect(s.netWorth).toBe(450000);
-    expect(s.parts.map((p) => p.key)).toEqual(['wealth', 'investors', 'deals', 'milestones', 'reputation']);
+    expect(s.parts.map((p) => p.key)).toEqual(['wealth', 'investors', 'deals', 'milestones', 'reputation', 'league']);
   });
   it('a 10-year career ends on its own after ten years, and the score reflects what happened', () => {
     const g = S.newGame(11, 'Test Co', 'rookie', 10, 'Tester');

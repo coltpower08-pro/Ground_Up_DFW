@@ -75,7 +75,7 @@ export function ScoresScreen({ onClose, initial }: { onClose: () => void; initia
                     <td className="num hidden text-right sm:table-cell">{money(e.netWorth)}</td>
                     <td className="num hidden text-right md:table-cell">{money(e.lpProfit)}</td>
                     <td className="num hidden text-right md:table-cell">{e.dealsSold}</td>
-                    <td className="hidden pl-3 text-[12px] text-ink2 lg:table-cell">{HOW[e.how]}{e.how !== 'complete' ? `, ${e.years} yrs` : ''}</td>
+                    <td className="hidden pl-3 text-[12px] text-ink2 lg:table-cell">{HOW[e.how]}{e.how !== 'complete' ? `, ${e.years} yrs` : ''}{e.rank ? ` · ${['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th'][e.rank]} of 7 firms` : ''}</td>
                   </tr>
                 ))}
               </tbody>
@@ -112,7 +112,7 @@ export function CareerEnd({ g }: { g: Game }) {
     const board = getBoard();
     board.submit({
       player: g.player || 'Player', firm: g.firmName, difficulty: g.difficulty, career: g.career, score: score.total, netWorth: score.netWorth,
-      lpProfit: score.lpProfit, dealsSold: g.deals.filter((d) => d.result).length, years: yearsPlayed(g), how: g.ending!.how, at: Date.now(),
+      lpProfit: score.lpProfit, dealsSold: g.deals.filter((d) => d.result).length, rank: score.rank, years: yearsPlayed(g), how: g.ending!.how, at: Date.now(),
     }).then(async (e) => {
       setEntry(e); forget();
       const r = await Promise.all(PERIODS.map((p) => board.rank(e, p.id))).catch(() => null);

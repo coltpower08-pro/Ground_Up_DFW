@@ -195,6 +195,7 @@ const RAIL: { id: PanelId | 'map'; label: string; icon: string }[] = [
   { id: 'capital', label: 'Capital', icon: 'M12 3v18M16 7c0-1.7-1.8-3-4-3S8 5.300 8 7s1.800 3 4 3 4 1.300 4 3-1.800 3-4 3-4-1.300-4-3' },
   { id: 'portfolio', label: 'Portfolio', icon: 'M3 20V9l6-4v15M9 20V11l12-3v12M2 20h20M13 13h4M13 16h4' },
   { id: 'market', label: 'Market', icon: 'M3 19h18M5 15l4-5 4 3 6-8M19 5v4h-4' },
+  { id: 'rivals', label: 'Rivals', icon: 'M6 20v-6M12 20V8M18 20v-9M4 20h16M12 8l-2-3h4z' },
   { id: 'milestones', label: 'Goals', icon: 'M7 4h10v5a5 5 0 01-10 0zM7 6H4a3 3 0 003 4M17 6h3a3 3 0 01-3 4M12 14v4M8 20h8' },
   { id: 'almanac', label: 'Almanac', icon: 'M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3zM5 17a3 3 0 013-3h11M9 8h6' },
 ];

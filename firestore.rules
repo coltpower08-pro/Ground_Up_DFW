@@ -8,7 +8,7 @@ service cloud.firestore {
     match /scores/{id} {
       allow read: if true;
       allow create: if request.auth != null
-        && request.resource.data.keys().hasOnly(['uid', 'player', 'firm', 'difficulty', 'career', 'score', 'netWorth', 'lpProfit', 'dealsSold', 'years', 'how', 'at', 'year', 'month', 'week'])
+        && request.resource.data.keys().hasOnly(['uid', 'player', 'firm', 'difficulty', 'career', 'score', 'netWorth', 'lpProfit', 'dealsSold', 'years', 'how', 'at', 'year', 'month', 'week', 'rank'])
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.at == request.time
         && request.resource.data.player is string && request.resource.data.player.size() > 0 && request.resource.data.player.size() <= 24
@@ -19,6 +19,7 @@ service cloud.firestore {
         && request.resource.data.netWorth is number && request.resource.data.lpProfit is number
         && request.resource.data.dealsSold is int && request.resource.data.years is number
         && request.resource.data.how in ['complete', 'retired', 'bust']
+        && (!('rank' in request.resource.data) || (request.resource.data.rank is int && request.resource.data.rank >= 1 && request.resource.data.rank <= 7))
         && request.resource.data.year is string && request.resource.data.month is string && request.resource.data.week is string;
       allow update, delete: if false;
     }

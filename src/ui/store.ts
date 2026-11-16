@@ -5,7 +5,7 @@ import type { Game } from '../engine/types';
 import { cloud, startCloud, type CloudUser } from '../services/cloud';
 import { clearSave, loadGame, saveGame, savedAt } from '../services/save';
 
-export type PanelId = 'deals' | 'rolodex' | 'capital' | 'portfolio' | 'market' | 'almanac' | 'milestones';
+export type PanelId = 'deals' | 'rolodex' | 'capital' | 'portfolio' | 'market' | 'rivals' | 'almanac' | 'milestones';
 export type Overlay = 'none' | 'zoning' | 'flood' | 'utilities' | 'land';
 export interface Toast { id: number; text: string; tone: 'good' | 'bad' | 'info' }
 

@@ -2,6 +2,10 @@
 export interface Term { key: string; term: string; short: string; more: string }
 
 export const GLOSSARY: Term[] = [
+  { key: 'league', term: 'League table', short: 'Every development firm in the metro ranked by net worth, yours included.',
+    more: 'Net worth is cash plus each firm\'s share of what its properties would sell for today. Finishing in the top three adds to your career score: 20% for first, 13% for second, 7% for third. Putting a site under contract while a rival is circling it, or signing a tenant while a rival has competing space nearby, earns extra points.' },
+  { key: 'competingsupply', term: 'Competing supply', short: 'Other new space of the same kind, in the same area, looking for the same tenants.',
+    more: 'Tenants and buyers compare options. When a rival has a similar building leasing nearby, your prospects arrive more slowly. When a rival is selling a similar property in the same month, buyers bid a little less for yours.' },
   { key: 'hbu', term: 'Highest and best use', short: 'The legal, buildable use that makes a piece of land worth the most.',
     more: 'Sellers price land to its highest and best use, not to yours. A corner that is worth $30 a foot to a shopping-center developer will never pencil as a truck yard, however good the access. When a deal will not work at any sensible offer, you are usually trying the wrong use for the dirt.' },
   { key: 'residual', term: 'Residual land value', short: 'What a developer can afford to pay for land: finished value, minus profit, minus every other cost.',

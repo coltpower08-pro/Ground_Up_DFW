@@ -1,5 +1,7 @@
 // Left-rail panels: Deals, Rolodex, Capital, Portfolio, Market, Almanac.
 import { scoreGame } from '../engine/score';
+import { CONTESTED_POINTS, league, rankBonusPct } from '../engine/rivals';
+import { TYPE_SHORT } from '../engine/params';
 import { ACHIEVEMENTS } from '../content/achievements';
 import { useState } from 'react';
 import { GLOSSARY } from '../content/glossary';
@@ -14,7 +16,7 @@ import { dateStr, money, mult, pct } from './format';
 import { Bar, Btn, Chip, PHASE_LABEL, Row, Section, Term } from './kit';
 import { useGame, useUI, type PanelId } from './store';
 
-const TITLES: Record<PanelId, string> = { deals: 'Deals', rolodex: 'Rolodex', capital: 'Capital', portfolio: 'Portfolio', market: 'Market', almanac: 'Almanac', milestones: 'Milestones' };
+const TITLES: Record<PanelId, string> = { deals: 'Deals', rolodex: 'Rolodex', capital: 'Capital', portfolio: 'Portfolio', market: 'Market', almanac: 'Almanac', milestones: 'Milestones', rivals: 'Competitors' };
 
 export function Panel() {
   const g = useGame();
@@ -32,6 +34,7 @@ export function Panel() {
         {panel === 'capital' && <Capital g={g} />}
         {panel === 'portfolio' && <Portfolio g={g} />}
         {panel === 'market' && <Market g={g} />}
+        {panel === 'rivals' && <Rivals g={g} />}
         {panel === 'almanac' && <Almanac g={g} />}
         {panel === 'milestones' && <Milestones g={g} />}
       </div>
@@ -241,6 +244,61 @@ function Market({ g }: { g: Game }) {
       </Section>
       <Section title="News">
         <ul className="space-y-2">{g.news.slice(0, 14).map((n, i) => (<li key={i} className="grid grid-cols-[8px_1fr] gap-2 text-[13px]"><i className={`mt-1.5 h-2 w-2 rounded-full ${n.tone === 'good' ? 'bg-good' : n.tone === 'bad' ? 'bg-bad' : 'bg-ink2/50'}`} /><span><span className="num text-[11.5px] text-ink2">{dateStr(n.day)}</span><br />{n.text}</span></li>))}</ul>
+      </Section>
+    </>
+  );
+}
+
+const ORD = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th'];
+function Rivals({ g }: { g: Game }) {
+  const sc = scoreGame(g), rows = league(g, sc.netWorth), top = rows[0].worth, me = rows.findIndex((r) => r.you), bonus = rankBonusPct(me + 1);
+  const ahead = me > 0 ? rows[me - 1] : null, c = g.contested ?? { won: 0, lost: 0 };
+  const [open, setOpen] = useState<string | null>(null);
+  const eyes = (g.rivals ?? []).filter((r) => r.eye).map((r) => ({ r, p: g.parcels.find((p) => p.id === r.eye!.parcelId) })).filter((x) => x.p && x.p.status === 'available');
+  const focusOn = useUI((st) => st.focusOn), set = useUI((st) => st.set);
+  return (
+    <>
+      <div className="rounded-xl border border-line bg-white/60 p-3">
+        <div className="flex items-baseline justify-between"><span className="eyebrow">Your standing</span><span className="num text-[12px] text-ink2">{rows.length} firms</span></div>
+        <div className="display text-[26px] font-semibold leading-tight">{ORD[me + 1]} by net worth</div>
+        <p className="mt-1 text-[13px] text-ink2">{ahead ? `${money(ahead.worth - sc.netWorth)} behind ${ahead.name}.` : 'You lead the league.'} {bonus ? `Holding this place adds ${Math.round(bonus * 100)}% to your career score.` : 'Reach the top three to earn a score bonus: 7% for 3rd, 13% for 2nd, 20% for 1st.'}</p>
+      </div>
+      <Section title="League table">
+        <div className="space-y-1.5">{rows.map((r, i) => (
+          <div key={r.id} className={`rounded-xl border p-2.5 ${r.you ? 'border-accent bg-accent/10' : 'border-line bg-white/60'}`}>
+            <button type="button" className="w-full text-left" aria-expanded={open === r.id} onClick={() => setOpen(open === r.id ? null : r.id)}>
+              <div className="flex items-baseline justify-between gap-2"><span className="text-[13.5px] font-semibold"><span className="num mr-1.5 text-ink2">{i + 1}</span><i className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full align-middle" style={{ background: r.color }} />{r.name}{r.you ? ' (you)' : ''}</span><span className="num shrink-0 text-[13.5px] font-semibold">{money(r.worth)}</span></div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-black/10"><div className="h-full rounded-full" style={{ width: `${Math.max(2, (r.worth / top) * 100)}%`, background: r.color }} /></div>
+              <div className="num mt-1 text-[12px] text-ink2">{r.done} deal{r.done === 1 ? '' : 's'} done · {r.active} under way</div>
+            </button>
+            {open === r.id && !r.you && (() => {
+              const rv = g.rivals!.find((x) => x.id === r.id)!;
+              return (
+                <div className="mt-2 border-t border-line pt-2 text-[12.5px]">
+                  <p className="text-ink2">{r.style}</p>
+                  <p className="mt-1"><span className="font-medium">Builds:</span> {rv.focus.map((t) => TYPE_SHORT[t].toLowerCase()).join(', ')}</p>
+                  {rv.active.length > 0 && <ul className="mt-1 space-y-0.5">{rv.active.map((d, k) => <li key={k}>· {d.name[0].toUpperCase() + d.name.slice(1)}: {d.stage === 'build' ? 'under construction' : d.stage === 'lease' ? 'leasing up' : 'on the market'}, about ${(d.cost / 1e6).toFixed(1)}M</li>)}</ul>}
+                  {r.best && <p className="mt-1 text-ink2">Last sale: {r.best}.</p>}
+                  {r.hist.length > 2 && <div className="mt-1"><Spark values={r.hist} /></div>}
+                </div>
+              );
+            })()}
+          </div>
+        ))}</div>
+        <p className="mt-2 text-[12px] text-ink2">Net worth is cash plus each firm's share of what its properties would sell for today. Tap a firm for what it builds and what it has under way.</p>
+      </Section>
+      <Section title="Head to head">
+        <Row label="Sites and tenants won from rivals" value={`${c.won} · ${(c.won * CONTESTED_POINTS).toLocaleString('en-US')} pts`} />
+        <Row label="Sites lost while negotiating" value={c.lost} />
+        <p className="mt-1 text-[12.5px] text-ink2">You win one by putting a site under contract while a rival is circling it, or by signing a tenant while a rival has competing space nearby. Each is worth {CONTESTED_POINTS} points.</p>
+      </Section>
+      <Section title="Sites rivals are circling">
+        {eyes.length === 0 && <p className="text-[13px] text-ink2">Nobody is circling a listed site right now.</p>}
+        <div className="space-y-1.5">{eyes.map(({ r, p }) => (
+          <button key={r.id} type="button" onClick={() => { focusOn(p!.tile.x + p!.tile.w / 2, p!.tile.y + p!.tile.h / 2, 1.1); set({ sel: { kind: 'parcel', id: p!.id }, panel: null }); }} className="w-full rounded-xl border border-line bg-white/60 p-2.5 text-left text-[13px] hover:bg-white">
+            <span className="font-semibold">{p!.name.replace(/ \(.*\)/, '')}</span> <span className="text-ink2">· {r.name} wants it for {TYPE_SHORT[r.eye!.type].toLowerCase()} and will likely move within {Math.max(1, r.eye!.until - Math.floor(g.day / 30))} month{r.eye!.until - Math.floor(g.day / 30) > 1 ? 's' : ''}.</span>
+          </button>
+        ))}</div>
       </Section>
     </>
   );

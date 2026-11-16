@@ -40,6 +40,8 @@ export interface Parcel {
   hidden: { env: 'none' | 'minor' | 'major'; soils: 'good' | 'expansive'; easementAcres: number };
   existing?: Existing;
   status: 'available' | 'contract' | 'owned' | 'sold' | 'rival';
+  /** Which rival bought it. */
+  rivalId?: string;
   counterPrice?: number; // seller's last counter, if any
 }
 
@@ -161,6 +163,8 @@ export interface Deal {
   type: DealType;
   parcelId: string;
   phase: Phase;
+  /** Set once this property has won a tenant away from a rival's competing space. */
+  beatRival?: boolean;
   startDay: number;
   price: number;
   earnest: number;
@@ -237,6 +241,10 @@ export interface Market {
 }
 
 export interface Game {
+  rivals?: Rival[];
+  rivalRng?: number;
+  /** Head-to-head record against rivals: sites and tenants won, sites lost. */
+  contested?: { won: number; lost: number };
   version: number;
   /** Which revision of the map this save was last brought up to. */
   map?: number;
@@ -278,3 +286,13 @@ export const LOC_LIMIT = 150000;
 export const MAX_ACTIVE = 3;
 export type StaffKey = 'analyst' | 'pm' | 'leasing';
 export type CyclePhase = 'expansion' | 'peak' | 'contraction' | 'recovery';
+
+/** A project a rival firm has under way. Real sites carry a parcelId; the rest are elsewhere in the metro. */
+export interface RivalDeal { name: string; type: DealType; district: string; parcelId?: string; cost: number; value: number; level: number; stage: 'build' | 'lease' | 'sale'; left: number }
+export interface Rival {
+  id: string; name: string; style: string; focus: DealType[]; skill: number; pace: number; start: number; color: string;
+  worth: number; done: number; won: number; active: RivalDeal[];
+  /** The site they are circling and the month they will move on it. */
+  eye: { parcelId: string; type: DealType; until: number } | null;
+  hist: number[]; best: string;
+}

@@ -37,7 +37,7 @@ class FirestoreBoard implements Board {
     const me = this.auth.currentUser?.uid;
     return snap.docs.map((x) => {
       const v = x.data();
-      return { id: x.id, player: v.player, firm: v.firm, difficulty: v.difficulty, career: v.career, score: v.score, netWorth: v.netWorth, lpProfit: v.lpProfit, dealsSold: v.dealsSold, years: v.years, how: v.how, at: (v.at as Timestamp | null)?.toMillis() ?? Date.now(), mine: v.uid === me };
+      return { id: x.id, player: v.player, firm: v.firm, difficulty: v.difficulty, career: v.career, score: v.score, netWorth: v.netWorth, lpProfit: v.lpProfit, dealsSold: v.dealsSold, rank: v.rank, years: v.years, how: v.how, at: (v.at as Timestamp | null)?.toMillis() ?? Date.now(), mine: v.uid === me };
     });
   }
   async rank(e: ScoreEntry, p: Period): Promise<number> {
