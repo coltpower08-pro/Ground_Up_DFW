@@ -19,6 +19,14 @@ Built with TypeScript, React, three.js and Vite. Hosted on Firebase (Hosting, Au
 | `.github/workflows/deploy.yml` | The automatic deploy. Needs the `FIREBASE_SERVICE_ACCOUNT` secret. |
 | `tests/` | Engine tests (`npm test`). |
 
+## How the world is built
+
+- `src/render/layout.ts` holds the hand-drawn geography: highways, rail, rivers, lakes, airports, cities. Every highway must end at another highway or the map edge; a test checks it.
+- `src/content/roads.ts` builds the street grid from that: arterials on every fourth grid line, sections filled in by density, no dead ends. It also works out each site's frontage, corner and drive to the freeway.
+- `src/content/sitegen.ts` places the rule-built sites and buildings. `src/content/sitedata.ts` gives each site its numbers for each property type and prices land at its highest and best use.
+- `src/engine/market.ts` is the market for each property type. `src/engine/rivals.ts` runs the six rival firms and the league table.
+- If you move a highway or change how sites are placed, raise `MAP_REV` in `src/content/world.ts` so saved games pick up the new map.
+
 ## One-time setup
 
 1. **Firebase web app.** Firebase console > Project settings > General > Your apps > add a Web app (`</>`). Copy the `firebaseConfig` values into `src/firebase-config.ts`, and put the project ID in `.firebaserc`.
