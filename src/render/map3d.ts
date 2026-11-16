@@ -1,12 +1,15 @@
 // True 3D metro map (WebGL via three.js): lit, shadowed, with a camera you can pan, zoom, rotate and tilt.
 // One tile is one world unit. X runs east, Z runs south, Y is up.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { Atmosphere, type Weather } from './atmos';
+import { roadNet } from '../content/roads';
+import '../content/world'; // builds the road network
 import type { Deal, Game, Parcel } from '../engine/types';
 import { AIRPORTS, CITIES, FLOOD, GROUND, H, INTERMODALS, LAKES, RAILS, RIVERS, ROADS, W, blockAt, hash, industry, isTaken, urbanity, type XY } from './layout';
 import { GLOW, GLOW_RED, applyNight, buildSite, canvasTex, mat, siteKey, siteTex, type SiteModel } from './sites3d';
@@ -17,6 +20,8 @@ export type OverlayMode = 'none' | 'zoning' | 'flood' | 'utilities' | 'land';
 interface View { game: Game | null; selParcel: string | null; overlay: OverlayMode; visible: Set<string>; pulse: string | null }
 const ZONE_COL: Record<string, string> = { I: '#5f7fa8', C: '#d2694c', AG: '#7fa35f', ETJ: '#c2a04a' };
 const ACCENT = '#d9622b';
+/** Sites are drawn a little smaller than their tiles so the streets along the tile edges stay clear. */
+const SITE_SCALE = 0.9, FI = 0.042;
 const UNIT = new THREE.BoxGeometry(1, 1, 1);
 const FLAT = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 
@@ -149,6 +154,8 @@ export class Map3D {
   private trucks: { road: number; t: number; speed: number; dir: 1 | -1 }[] = [];
   private truckBody!: THREE.InstancedMesh; private truckCab!: THREE.InstancedMesh;
   private roadLen: { seg: number[]; total: number }[] = [];
+  /** Everything vehicles drive on: the named freeways and highways, then the long surface arterials. */
+  private paths: { kind: 'interstate' | 'highway' | 'arterial'; pts: XY[] }[] = [];
   private mini: HTMLCanvasElement | null = null;
   private ray = new THREE.Raycaster();
   private plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -254,6 +261,24 @@ export class Map3D {
       const m = new THREE.Mesh(ribbon(smooth(r.pts), r.kind === 'interstate' ? 0.24 : r.kind === 'highway' ? 0.16 : 0.09, 0.018 + order[r.kind] * 0.004), mats[r.kind]);
       m.receiveShadow = true; this.scene.add(m);
     });
+
+    // surface streets: arterials, collectors, local access roads and the frontage roads beside the interstates
+    const net = roadNet(), plain = (c: string) => mk(canvasTex(8, 8, (x) => { x.fillStyle = c; x.fillRect(0, 0, 8, 8); }));
+    const street = { arterial: mats.arterial, collector: mk(canvasTex(64, 64, (c) => { c.fillStyle = '#716e68'; c.fillRect(0, 0, 64, 64); c.fillStyle = '#e8c53a'; c.fillRect(30, 0, 3, 30); }, true)), local: plain('#7d7a73') };
+    const SW = { arterial: 0.07, collector: 0.046, local: 0.032 }, SY = { arterial: 0.0105, collector: 0.01, local: 0.0095 };
+    this.roadMats.push(street.collector, street.local);
+    for (const cls of ['local', 'collector', 'arterial'] as const) {
+      const parts = net.segs.filter((sg) => sg.cls === cls).map((sg) => ribbon(smooth([sg.a, sg.b]), SW[cls], SY[cls]));
+      if (cls === 'local') for (const f of net.frontage) parts.push(ribbon(f, 0.036, 0.0165));
+      if (!parts.length) continue;
+      const m = new THREE.Mesh(mergeGeometries(parts), street[cls]); m.receiveShadow = true; this.scene.add(m);
+      if (cls !== 'arterial') this.near.push(m);
+    }
+    // plain asphalt squares tidy up the intersections; aprons carry each driveway from the street into its site
+    const patch = new THREE.InstancedMesh(FLAT, plain('#6f6c66'), net.nodes.length + Object.keys(net.site).length), po = new THREE.Object3D();
+    net.nodes.forEach(([x, z, cls], i) => { po.position.set(x, 0.0112, z); po.scale.set(SW[cls] + 0.012, 1, SW[cls] + 0.012); po.rotation.set(0, 0, 0); po.updateMatrix(); patch.setMatrixAt(i, po.matrix); });
+    Object.values(net.site).forEach((r, i) => { const ew = r.side === 'E' || r.side === 'W'; po.position.set(r.drive[0], 0.0114, r.drive[1]); po.scale.set(ew ? 0.13 : 0.07, 1, ew ? 0.07 : 0.13); po.updateMatrix(); patch.setMatrixAt(net.nodes.length + i, po.matrix); });
+    patch.receiveShadow = true; patch.frustumCulled = false; this.scene.add(patch); this.roadMats.push(patch.material as THREE.MeshStandardMaterial);
 
     const cells = [...FLOOD];
     this.flood = new THREE.InstancedMesh(FLAT, new THREE.MeshBasicMaterial({ color: '#3f87b5', transparent: true, opacity: 0.4, depthWrite: false }), cells.length);
@@ -365,8 +390,9 @@ export class Map3D {
   }
 
   private buildTraffic() {
-    this.roadLen = ROADS.map((r) => { const seg = r.pts.slice(1).map((p, i) => Math.hypot(p[0] - r.pts[i][0], p[1] - r.pts[i][1])); return { seg, total: seg.reduce((a, b) => a + b, 0) }; });
-    ROADS.forEach((r, i) => { if (r.kind === 'arterial') return; const n = Math.max(3, Math.round(this.roadLen[i].total / 4)); for (let k = 0; k < n; k++) this.trucks.push({ road: i, t: hash(i, k, 3), speed: (0.35 + hash(i, k, 5) * 0.3) / this.roadLen[i].total, dir: k % 2 ? 1 : -1 }); });
+    this.paths = [...ROADS, ...roadNet().segs.filter((sg) => sg.cls === 'arterial' && Math.abs(sg.b[0] - sg.a[0]) + Math.abs(sg.b[1] - sg.a[1]) >= 6).map((sg) => ({ kind: 'arterial' as const, pts: [sg.a, sg.b] }))];
+    this.roadLen = this.paths.map((r) => { const seg = r.pts.slice(1).map((p, i) => Math.hypot(p[0] - r.pts[i][0], p[1] - r.pts[i][1])); return { seg, total: seg.reduce((a, b) => a + b, 0) }; });
+    this.paths.forEach((r, i) => { if (r.kind === 'arterial') return; const n = Math.max(3, Math.round(this.roadLen[i].total / 4)); for (let k = 0; k < n; k++) this.trucks.push({ road: i, t: hash(i, k, 3), speed: (0.35 + hash(i, k, 5) * 0.3) / this.roadLen[i].total, dir: k % 2 ? 1 : -1 }); });
     const n = this.trucks.length, col = new THREE.Color();
     this.truckBody = new THREE.InstancedMesh(UNIT, mat('#ffffff'), n); this.truckCab = new THREE.InstancedMesh(UNIT, mat('#ffffff'), n);
     for (let i = 0; i < n; i++) { this.truckBody.setColorAt(i, col.set(['#f4f1ea', '#f4f1ea', '#c9502f', '#3f6f8f', '#e0b23f', '#e8e4da'][i % 6])); this.truckCab.setColorAt(i, col.set(['#b3402e', '#2f5f8a', '#f0efe9', '#3d7a52', '#1f2327'][i % 5])); }
@@ -384,7 +410,7 @@ export class Map3D {
   /** Cars, trains, planes and sailboats: the things that move without the player doing anything. */
   private buildLife() {
     const col = new THREE.Color();
-    ROADS.forEach((r, i) => { const n = Math.round(this.roadLen[i].total * (r.kind === 'interstate' ? 2.2 : r.kind === 'highway' ? 1.3 : 0.7)); for (let k = 0; k < n; k++) this.cars.push({ road: i, t: hash(i, k, 13), speed: (0.5 + hash(i, k, 15) * 0.45) * (r.kind === 'arterial' ? 0.6 : 1) / this.roadLen[i].total, dir: k % 2 ? 1 : -1, lane: r.kind === 'interstate' ? 0.028 + (k % 3 === 0 ? 0.03 : 0) : r.kind === 'highway' ? 0.035 : 0.02 }); });
+    this.paths.forEach((r, i) => { const n = Math.round(this.roadLen[i].total * (r.kind === 'interstate' ? 2.2 : r.kind === 'highway' ? 1.3 : i < ROADS.length ? 0.7 : 0.45)); for (let k = 0; k < n; k++) this.cars.push({ road: i, t: hash(i, k, 13), speed: (0.5 + hash(i, k, 15) * 0.45) * (r.kind === 'arterial' ? 0.6 : 1) / this.roadLen[i].total, dir: k % 2 ? 1 : -1, lane: r.kind === 'interstate' ? 0.028 + (k % 3 === 0 ? 0.03 : 0) : r.kind === 'highway' ? 0.035 : 0.02 }); });
     const n = this.cars.length, CARC = ['#f4f1ea', '#b3402e', '#3d4248', '#2f5f8a', '#c9c5bb', '#1f2326', '#8a9198', '#e8e4da', '#7a1f1a', '#d9d4c8'];
     this.carBody = new THREE.InstancedMesh(UNIT, mat('#ffffff', { rough: 0.4, metal: 0.3 }), n); this.carTop = new THREE.InstancedMesh(UNIT, mat('#1d2a33', { rough: 0.15, metal: 0.5 }), n);
     for (let i = 0; i < n; i++) this.carBody.setColorAt(i, col.set(CARC[Math.floor(hash(i, 3, 17) * CARC.length)]));
@@ -458,7 +484,7 @@ export class Map3D {
     for (const b of this.boats) { const a = t * b.sp + b.ph; b.g.position.set(b.x + Math.cos(a) * b.rx, 0.004 + Math.sin(t * 1.3 + b.ph) * 0.0015, b.z + Math.sin(a) * b.rz); b.g.rotation.set(0, -a + (b.sp > 0 ? Math.PI : 0), Math.sin(t * 0.9 + b.ph) * 0.06); }
   }
   private along(i: number, t: number): [number, number, number] {
-    const r = ROADS[i], L = this.roadLen[i]; let d = t * L.total;
+    const r = this.paths[i], L = this.roadLen[i]; let d = t * L.total;
     for (let s = 0; s < L.seg.length; s++) { if (d <= L.seg[s] || s === L.seg.length - 1) { const f = Math.min(1, d / (L.seg[s] || 1)), a = r.pts[s], b = r.pts[s + 1]; return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, Math.atan2(b[0] - a[0], b[1] - a[1])]; } d -= L.seg[s]; }
     return [r.pts[0][0], r.pts[0][1], 0];
   }
@@ -497,7 +523,7 @@ export class Map3D {
       let s = cur;
       if (!s || s.key !== key) {
         if (s) { this.scene.remove(s.model.group); disposeGroup(s.model.group); }
-        const model = buildSite(p, d); applyNight(model.group, Math.max(0, (this.atmos.night - 0.25) / 0.75)); this.scene.add(model.group);
+        const model = buildSite(p, d); model.group.scale.set(SITE_SCALE, 1, SITE_SCALE); model.group.position.x += (p.tile.w * (1 - SITE_SCALE)) / 2; model.group.position.z += (p.tile.h * (1 - SITE_SCALE)) / 2; applyNight(model.group, Math.max(0, (this.atmos.night - 0.25) / 0.75)); this.scene.add(model.group);
         s = { key, model, frame: s?.frame ?? new THREE.Group(), frameKey: s?.frameKey ?? '' };
         if (!cur) this.scene.add(s.frame);
         this.sites.set(p.id, s);
@@ -506,7 +532,7 @@ export class Map3D {
         s.frameKey = frameKey; s.frame.clear(); s.frame.position.set(p.tile.x, 0, p.tile.y);
         const w = p.tile.w, h = p.tile.h;
         const color = sel ? '#ffffff' : mine ? ACCENT : p.status === 'available' ? (p.offMarket ? '#7a5fb0' : '#fff8e6') : null;
-        if (color) { const th = sel ? 0.026 : hov ? 0.022 : mine ? 0.014 : 0.012, m = new THREE.MeshBasicMaterial({ color }); for (const [bw, bd, x, z] of [[w + th, th, w / 2, 0], [w + th, th, w / 2, h], [th, h + th, 0, h / 2], [th, h + th, w, h / 2]]) { const b = new THREE.Mesh(UNIT, m); b.scale.set(bw, 0.012, bd); b.position.set(x, 0.012, z); s.frame.add(b); } }
+        if (color) { const th = sel ? 0.026 : hov ? 0.022 : mine ? 0.014 : 0.012, m = new THREE.MeshBasicMaterial({ color }); for (const [bw, bd, x, z] of [[w - 2 * FI + th, th, w / 2, FI], [w - 2 * FI + th, th, w / 2, h - FI], [th, h - 2 * FI + th, FI, h / 2], [th, h - 2 * FI + th, w - FI, h / 2]]) { const b = new THREE.Mesh(UNIT, m); b.scale.set(bw, 0.012, bd); b.position.set(x, 0.012, z); s.frame.add(b); } }
         if (oc) { const t = new THREE.Mesh(FLAT, new THREE.MeshBasicMaterial({ color: oc, transparent: true, opacity: 0.62, depthWrite: false })); t.scale.set(w, 1, h); t.position.set(w / 2, 0.035, h / 2); s.frame.add(t); }
         if (this.view.pulse === p.id) { const ring = new THREE.Group(), m = new THREE.MeshBasicMaterial({ color: ACCENT, transparent: true }); for (const [bw, bd, x, z] of [[w, 0.04, 0, -h / 2], [w, 0.04, 0, h / 2], [0.04, h, -w / 2, 0], [0.04, h, w / 2, 0]]) { const b = new THREE.Mesh(UNIT, m); b.scale.set(bw + 0.04, 0.01, bd); b.position.set(x, 0, z); ring.add(b); } ring.position.set(w / 2, 0.02, h / 2); ring.userData.m = m; s.frame.add(ring); this.pulseRing = ring; }
         else if (this.pulseRing && this.pulseRing.parent === null) this.pulseRing = null;

@@ -30,7 +30,9 @@ export interface Parcel {
   floodPct: number;
   water: boolean;
   sewer: boolean;
-  access: number; // 1-5, highway access
+  access: number; // 1-5, highway access, worked out from the road network
+  /** Property types this location suits, best first. */
+  fit?: DealType[];
   rail: boolean;
   offMarket: boolean;
   blurb: string;

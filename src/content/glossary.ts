@@ -2,6 +2,12 @@
 export interface Term { key: string; term: string; short: string; more: string }
 
 export const GLOSSARY: Term[] = [
+  { key: 'frontage', term: 'Frontage', short: 'The road a site faces, and how much of that road it touches.',
+    more: 'Frontage decides who sees a property and how they reach it. Shops want a busy arterial or a freeway frontage road. Warehouses and yards care less about being seen and more about how quickly a truck reaches the freeway.' },
+  { key: 'hardcorner', term: 'Hard corner', short: 'A site at the crossing of two major roads, usually with a traffic signal.',
+    more: 'A hard corner gets traffic from four directions and access from two streets. It is the most valuable kind of retail land and close to wasted on a storage yard.' },
+  { key: 'interchange', term: 'Interchange', short: 'Where a surface road meets a freeway, with ramps on and off.',
+    more: 'Distance to the nearest interchange is the first thing an industrial tenant measures. A site a mile from the ramp leases faster and for more than the same site five miles back.' },
   { key: 'ios', term: 'Industrial outdoor storage (IOS)', short: 'A fenced, surfaced yard leased for trucks, trailers, equipment or materials.',
     more: 'IOS has little or no building, so it is fast and cheap to develop. Rent is quoted per acre per month. Value comes from location and zoning, because few cities allow new outdoor storage.' },
   { key: 'loi', term: 'Letter of intent (LOI)', short: 'A short, non-binding offer that sets price and key terms before lawyers draft the contract.',

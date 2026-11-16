@@ -20,7 +20,7 @@ function run(g: Game, until: () => boolean, maxDays = 4000) {
 }
 function rich(seed: number): Game {
   const g = S.newGame(seed);
-  g.unlocked.push('retail', 'mf', 'office', 'acq'); g.cash = 4e7;
+  g.unlocked.push('retail', 'mf', 'office', 'acq'); g.cash = 2e8;
   for (const n of g.npcs) n.rel = 95;
   g.trackRecord = 5; g.rep.investors = 90; g.rep.city = 90;
   return g;
@@ -38,8 +38,8 @@ function play(g: Game, parcelId: string, type: DealType, reno: Deal['reno'] = 'a
   expect(d.phase).toBe('predev');
   if (d.acq) S.setReno(g, d.id, reno);
   if (!(d.acq && reno === 'asis')) S.setGc(g, d.id, 'cowtown');
-  S.setGpPct(g, d.id, 0.1);
   const lp = g.npcs.filter((n) => n.role === 'lp').sort((a, b) => (b.maxCheck ?? 0) - (a.maxCheck ?? 0))[0];
+  S.setGpPct(g, d.id, Math.min(1, Math.max(0.1, Math.ceil((1 - ((lp.maxCheck ?? 0) * 0.9) / computeProforma(g, d).budget.equity) * 20) / 20)));
   run(g, () => { if (!d.lpId) S.pitchLp(g, d.id, lp.id); return !!d.lpId; });
   const pf = computeProforma(g, d);
   expect(pf.budget.loan + pf.budget.equity).toBeCloseTo(pf.budget.total, 2);
@@ -123,7 +123,7 @@ describe('milestones', () => {
     old.parcels = old.parcels.filter((p) => !p.existing);
     const m = S.migrate(old);
     expect(m.unlocked).toEqual(['ios', 'spec']);
-    expect(m.parcels.filter((p) => p.existing).length).toBe(8);
+    expect(m.parcels.filter((p) => p.existing).length).toBe(35);
     expect(m.parcels.filter((p) => p.existing).every((p) => p.existing!.type === 'mf' || !p.existing!.leases.length || p.existing!.leases[0].rentAnnual > 0)).toBe(true);
   });
 });

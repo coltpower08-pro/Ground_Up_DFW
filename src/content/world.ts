@@ -2,10 +2,13 @@
 // Geography (highways, towns, rail) is real. Parcels, firms and people are invented,
 // and every price and rent is a game-balance number, not market data.
 import type { Existing, Npc, Parcel } from '../engine/types';
-import { placeRect } from '../render/layout';
+import { ll, placeRect, type XY } from '../render/layout';
+import { buildRoadNet, setRoadNet, type SiteRoad } from './roads';
+import { context, generateSites, suitability } from './sitegen';
+import { ACRE_RANGE } from '../engine/params';
 
 /** How strong each district is for retail, apartments and offices (rooftops and incomes, not truck access). */
-const URBAN: Record<string, number> = { alliance: 0.95, dfw: 1.15, gsw: 1.0, netarrant: 1.08, southdallas: 0.8, eastdallas: 0.9, southtarrant: 0.92, westfw: 0.92, denton: 0.95, collin: 1.2 };
+const URBAN: Record<string, number> = { alliance: 0.95, dfw: 1.15, gsw: 1.0, netarrant: 1.08, southdallas: 0.8, eastdallas: 0.9, southtarrant: 0.92, westfw: 0.92, denton: 0.95, collin: 1.2, cbd: 1.3, fwcbd: 1.08 };
 export interface District { id: string; name: string; blurb: string; urban: number; ind: number; ios: number; cap: number; ent: number; demand: number; at: [number, number] }
 /** Each district scales the metro-wide market: rent multipliers, a cap-rate adjustment, approval odds and tenant demand. */
 export const DISTRICTS: Record<string, District> = Object.fromEntries(([
@@ -18,6 +21,8 @@ export const DISTRICTS: Record<string, District> = Object.fromEntries(([
   ['southtarrant', 'South Tarrant / I-35W South', 'Rail-served pockets and farmland from Everman to Burleson. Steady, never hot.', 0.95, 0.95, 0.001, 0.02, 0.9, 32.6, -97.3],
   ['westfw', 'West Fort Worth / Benbrook / Aledo', 'Emerging corridor west on I-20 and I-30. The cheapest dirt in the metro and the longest lease-ups.', 0.88, 0.9, 0.0025, 0.05, 0.75, 32.72, -97.48],
   ['denton', 'Denton / I-35 North', 'Edge greenfield where the two I-35s meet. Rail plays and patient capital.', 0.92, 0.9, 0.0015, 0.03, 0.85, 33.2, -97.17],
+  ['cbd', 'Central and North Dallas', 'Downtown, Uptown, the Park Cities and the Tollway corridor up to Addison. The deepest office and apartment market in the metro, and the most expensive dirt.', 1.15, 1.25, -0.002, -0.15, 1.05, 32.8, -96.8],
+  ['fwcbd', 'Central Fort Worth', 'Downtown Fort Worth and the near west side. Smaller and steadier than Dallas, with a city that wants its core filled in.', 1.02, 1.08, 0, -0.06, 0.95, 32.752, -97.335],
   ['collin', 'Collin County / Plano / Frisco / McKinney', 'Wealthy suburbs with flex and light industrial. High rents, expensive land, and little patience for trucks.', 1.05, 1.1, -0.001, -0.15, 0.9, 33.1, -96.72],
 ] as [string, string, string, number, number, number, number, number, number, number][]).map(([id, name, blurb, ind, ios, cap, ent, demand, la, lo]) => [id, { id, name, blurb, urban: URBAN[id], ind, ios, cap, ent, demand, at: [la, lo] }]));
 
@@ -110,8 +115,37 @@ const EX_PARCELS: Omit<Parcel, 'status'>[] = EXISTING.map(([id, name, area, dist
   existing: { ...ex, leases: ex.leases.map(([tenant, credit, factor, monthsLeft, share]) => ({ tenant, credit, factor, monthsLeft, share, rentAnnual: 0 })) },
 }));
 
-const copy = (p: Omit<Parcel, 'status'>): Parcel => ({ ...p, tile: { ...p.tile }, hidden: { ...p.hidden }, existing: p.existing ? { ...p.existing, leases: p.existing.leases.map((l) => ({ ...l })) } : undefined, status: 'available' });
-export const makeParcels = (): Parcel[] => [...PARCELS, ...EX_PARCELS].map(copy);
+// --- the rest of the map: rule-built sites and buildings, then the road network that ties every one of them in ---
+// each district is a set of anchor points; a spot belongs to the district with the nearest anchor
+const ANCHORS: Record<string, [number, number][]> = {
+  collin: [[33.1, -96.72], [33.0, -96.72], [33.15, -96.83], [33.2, -96.64]], cbd: [[32.79, -96.8], [32.86, -96.8], [32.93, -96.82]], eastdallas: [[32.76, -96.56], [32.9, -96.64], [32.72, -96.62]],
+  dfw: [[32.94, -97.02], [32.86, -96.95], [32.97, -96.93]], gsw: [[32.75, -97.05], [32.7, -97.1]], southdallas: [[32.61, -96.73], [32.6, -96.9], [32.48, -97.0], [32.68, -96.82]],
+  fwcbd: [[32.752, -97.335]], netarrant: [[32.83, -97.19], [32.92, -97.2]], alliance: [[32.99, -97.3], [33.07, -97.3], [32.9, -97.36]], southtarrant: [[32.6, -97.3], [32.57, -97.14]],
+  westfw: [[32.72, -97.48], [32.78, -97.45]], denton: [[33.2, -97.17], [33.12, -97.08]],
+};
+const DCENTERS: [string, XY][] = Object.entries(ANCHORS).flatMap(([id, pts]) => pts.map(([la, lo]) => [id, ll(la, lo)] as [string, XY]));
+/** The district a spot belongs to. */
+export function districtAt(x: number, y: number): string {
+  let best = '', bd = 1e9;
+  for (const [id, [cx, cy]] of DCENTERS) { const d = Math.hypot(cx - x - 0.5, cy - y - 0.5) * (id === 'fwcbd' ? 2.2 : 1); if (d < bd) { bd = d; best = id; } }
+  return best;
+}
+const GEN = generateSites(districtAt, [...PARCELS, ...EX_PARCELS]);
+const ALL: Omit<Parcel, 'status'>[] = [...PARCELS, ...EX_PARCELS, ...GEN.land, ...GEN.buildings];
+const NET = buildRoadNet(ALL.map((p) => ({ id: p.id, tile: p.tile })));
+setRoadNet(NET);
+for (const p of ALL) {
+  const r = NET.site[p.id];
+  if (p.blurb.includes('{front}')) p.blurb = p.blurb.replace('{front}', r.hard ? 'A hard corner where two arterials meet' : r.front === 'interstate' || r.front === 'highway' ? `Freeway-visible frontage on ${r.frontName.replace(' frontage', '')}` : r.corner ? 'A corner site on a busy street' : 'A mid-block retail site');
+  // the old hand-set access dots now come from the drive to the nearest interchange
+  p.access = r.rampMi <= 0.65 ? 5 : r.rampMi <= 1.1 ? 4 : r.rampMi <= 2 ? 3 : r.rampMi <= 3.5 ? 2 : 1;
+  if (!p.fit) { const s = suitability(context(p.tile.x, p.tile.y)), ua = p.acres * (1 - p.floodPct); p.fit = (Object.keys(s) as (keyof typeof s)[]).filter((t) => s[t] >= 0.55 && ua >= ACRE_RANGE[t][0] && ua <= ACRE_RANGE[t][1]).sort((a, b) => s[b] - s[a]); if (!p.fit.length) p.fit = [p.acres >= 6 ? 'spec' : 'ios']; }
+}
+/** Frontage, corner and distance to a freeway for a site. */
+export const roadOf = (id: string): SiteRoad => NET.site[id];
+
+const copy = (p: Omit<Parcel, 'status'>): Parcel => ({ ...p, fit: p.fit ? [...p.fit] : undefined, tile: { ...p.tile }, hidden: { ...p.hidden }, existing: p.existing ? { ...p.existing, leases: p.existing.leases.map((l) => ({ ...l })) } : undefined, status: 'available' });
+export const makeParcels = (): Parcel[] => ALL.map(copy);
 
 export const makeNpcs = (): Npc[] => [
   { id: 'dusty', name: 'Dusty Rhodes', org: 'Rhodes Land Company', role: 'broker', rel: 52,

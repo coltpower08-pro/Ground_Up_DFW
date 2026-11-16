@@ -1,7 +1,7 @@
 // Right-hand context drawer: a parcel dossier or the Deal Room for the selected deal.
 import { useState } from 'react';
 import { ACHIEVEMENTS } from '../content/achievements';
-import { DISTRICTS } from '../content/world';
+import { DISTRICTS, roadOf } from '../content/world';
 import { ACRE_RANGE, ATTORNEY_FEE, ENT, IOS, MF_UNIT_SF, OUTREACH_COST, PERM, PRODUCTS, RENO, REPORTS, SPEC, TERMS, TYPE_SHORT } from '../engine/params';
 import { askPrice, computeProforma, dealTerms, entitlementKind, existingLeased, existingMarketNoi, getNpc, getParcel, sensitivity, usableAcres } from '../engine/proforma';
 import * as S from '../engine/sim';
@@ -27,6 +27,22 @@ export function Drawer() {
 }
 
 // ---------------------------------------------------------------- parcel
+
+/** What the road network says about a site: what it fronts, whether it is a corner, and how far the freeway is. */
+function RoadFacts({ p }: { p: Parcel }) {
+  const r = roadOf(p.id);
+  if (!r) return null;
+  const front = r.front === 'interstate' || r.front === 'highway' ? `${r.frontName} road` : r.frontName[0].toUpperCase() + r.frontName.slice(1);
+  return (
+    <div className="mt-1 text-[13px]">
+      <Row label={<Term k="frontage">Fronts</Term>} value={front} />
+      <Row label={<Term k="hardcorner">Corner</Term>} value={r.hard ? 'Hard corner, two arterials' : r.corner ? 'Corner lot' : 'Mid-block'} />
+      <Row label={<Term k="interchange">Nearest freeway</Term>} value={`${r.rampMi.toFixed(1)} mi to ${r.rampName || 'a highway'}`} />
+      <Row label="Highway access" value={'●'.repeat(p.access) + '○'.repeat(5 - p.access)} />
+      {!p.existing && p.fit && p.fit.length > 0 && <Row label="Location suits" value={p.fit.map((t) => TYPE_SHORT[t]).join(', ')} />}
+    </div>
+  );
+}
 
 const PRODUCT_SUB: Record<DealType, string> = { ios: 'Fast, simple, no building', spec: 'Bigger, slower, more capital', retail: 'Many small tenants, high rent', mf: 'Fills unit by unit, low cap rate', office: 'Slow to lease, costly build-outs' };
 const TYPE_ARTICLE: Record<DealType, string> = { ios: 'an IOS yard', spec: 'a spec building', retail: 'a shopping center', mf: 'apartments', office: 'an office building' };
@@ -55,7 +71,7 @@ function ParcelPanel({ g, p }: { g: Game; p: Parcel }) {
   const act = useUI((s) => s.act), set = useUI((s) => s.set);
   const ask = askPrice(g, p), usable = usableAcres(p);
   const ex = p.existing;
-  const [pick, setType] = useState<DealType>('ios');
+  const [pick, setType] = useState<DealType>(() => (p.fit ?? []).find((t) => g.unlocked.includes(t)) ?? (usable >= SPEC.minAcres && !(p.fit ?? []).includes('ios') ? 'spec' : 'ios'));
   const type: DealType = ex ? ex.type : pick;
   const fits = (t: DealType) => usable >= ACRE_RANGE[t][0] && usable <= ACRE_RANGE[t][1];
   const lockedBy = (key: string) => (g.unlocked.includes(key) ? null : ACHIEVEMENTS.find((a) => a.unlock === key) ?? null);
@@ -117,9 +133,10 @@ function ParcelPanel({ g, p }: { g: Game; p: Parcel }) {
           <Row label="Per square foot" value={`$${(p.askPsf * g.market.landIndex).toFixed(2)}`} />
           <Row label="Zoning" value={ZONING[p.zoning].split(',')[0]} />
           <Row label="Utilities" value={p.water && p.sewer ? 'Water, sewer' : p.water ? 'Water only' : 'None'} />
-          <Row label="Highway access" value={'●'.repeat(p.access) + '○'.repeat(5 - p.access)} />
           <Row label="Rail" value={p.rail ? 'Rail-served' : 'No'} />
+          <Row label="Flood plain" value={p.floodPct ? pct(p.floodPct, 0) : 'None'} />
         </div>}
+        <RoadFacts p={p} />
 
         <Section title={ex ? 'If you buy it as it stands' : 'What would you build?'}>
           {!ex && (

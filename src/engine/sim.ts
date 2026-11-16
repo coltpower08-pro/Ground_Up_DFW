@@ -32,7 +32,9 @@ function initExisting(g: Game, only?: (p: Parcel) => boolean) {
 export function migrate(g: Game): Game {
   g.achievements ??= []; g.unlocked ??= ['ios', 'spec']; g.career ??= 0; g.player ??= '';
   for (const d of g.deals) { d.acq ??= false; d.reno ??= 'asis'; d.occ ??= 0; if (d.uw) { d.uw.leaseUp ??= d.type === 'ios' ? 3 : 6; d.uw.holdMonths ??= 6; } }
-  const have = new Set(g.parcels.map((p) => p.id)), fresh = makeParcels().filter((p) => !have.has(p.id));
+  const all = makeParcels(), have = new Set(g.parcels.map((p) => p.id)), fresh = all.filter((p) => !have.has(p.id));
+  // facts that come from the map itself (road access, what the location suits) follow the current map
+  for (const p of g.parcels) { const f = all.find((x) => x.id === p.id); if (f) { p.access = f.access; p.fit = f.fit; } }
   if (fresh.length) { g.parcels.push(...fresh); initExisting(g, (p) => fresh.includes(p)); }
   return g;
 }
@@ -957,7 +959,7 @@ function monthClose(g: Game) {
   if (m > 2 && chance(g, 0.07)) { const e = pick(g, WORLD_EVENTS); e.apply(g); news(g, e.text, e.tone); }
   if (m > 5 && chance(g, 0.12)) {
     const open = g.parcels.filter((p) => p.status === 'available' && !['bluemound', 'northlake10'].includes(p.id));
-    if (open.length > 18) { const p = pick(g, open); p.status = 'rival'; news(g, `${pick(g, RIVALS)} bought ${p.name.replace(/ \(.*\)/, '')}.`, 'info'); }
+    if (open.length > 70) { const p = pick(g, open); p.status = 'rival'; news(g, `${pick(g, RIVALS)} bought ${p.name.replace(/ \(.*\)/, '')}.`, 'info'); }
   }
   if (g.career && m >= g.career * 12) {
     g.over = true;

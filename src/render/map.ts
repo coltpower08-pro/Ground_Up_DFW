@@ -1,5 +1,7 @@
 // Isometric metro map renderer (Canvas 2D). Reads the live Game object every frame.
 // Only what is on screen is drawn, and detail drops away as you zoom out.
+import { roadNet } from '../content/roads';
+import '../content/world';
 import type { Deal, Game, Parcel } from '../engine/types';
 import { AIRPORTS, CITIES, FLOOD, GROUND, H, INTERMODALS, LAKES, RAILS, RIVERS, ROADS, W, blockAt, hash, industry, isTaken, urbanity, type Rect, type XY } from './layout';
 
@@ -318,6 +320,8 @@ export class IsoMap {
     for (const a of AIRPORTS) { this.poly(this.diamond(a), '#a9a498'); for (let i = 0; i < Math.max(1, Math.round(a.w)); i++) { const rx = a.x + 0.3 + i * (a.w / Math.max(1, Math.round(a.w))); this.poly(this.diamond({ x: rx, y: a.y + 0.15, w: 0.22, h: a.h - 0.3 }), C.runway); this.line([[rx + 0.11, a.y + 0.3], [rx + 0.11, a.y + a.h - 0.3]], '#efe9d8', 1, [8, 7]); } }
     for (const r of RAILS) { this.line(r, C.rail, 2.4 * Math.max(1, k * 0.5)); if (z > 0.5) this.line(r, '#8a7c6c', 5, [1.5, 5]); }
     const wide = Math.max(1, k * 0.55);
+    for (const sg of roadNet().segs) this.line([sg.a, sg.b], sg.cls === 'arterial' ? C.arterial : '#b9b2a2', (sg.cls === 'arterial' ? 3.2 : sg.cls === 'collector' ? 2 : 1.4) * wide);
+    for (const f of roadNet().frontage) this.line(f, '#b9b2a2', 1.6 * wide);
     for (const r of ROADS) if (r.kind === 'arterial') this.line(r.pts, C.arterial, 5 * wide);
     for (const r of ROADS) if (r.kind !== 'arterial') this.line(r.pts, '#55514c', (r.kind === 'interstate' ? 14 : 10) * wide);
     for (const r of ROADS) if (r.kind !== 'arterial') { this.line(r.pts, C.road, (r.kind === 'interstate' ? 11 : 7.5) * wide); if (z > 0.55) this.line(r.pts, '#f1e6c8', 1.1, [6, 8]); }

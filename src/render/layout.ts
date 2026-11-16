@@ -139,10 +139,12 @@ for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
 export interface Rect { x: number; y: number; w: number; h: number }
 const taken = new Set<number>(), clear = new Set<number>();
 /** Find the free rectangle of tiles nearest a real-world location. Deterministic, so saves stay valid. */
-export function placeRect(lat: number, lon: number, w: number, h: number): Rect {
-  const [fx, fy] = ll(lat, lon), cx = Math.floor(fx), cy = Math.floor(fy);
+export function placeRect(lat: number, lon: number, w: number, h: number): Rect { const [fx, fy] = ll(lat, lon); return placeRectAt(fx, fy, w, h)!; }
+/** The same search from tile coordinates. With `strict`, gives up (null) when nothing is free within `reach` tiles. */
+export function placeRectAt(fx: number, fy: number, w: number, h: number, strict = false, reach = 7): Rect | null {
+  const cx = Math.floor(fx), cy = Math.floor(fy);
   const free = (x: number, y: number) => { for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) { if (!inside(x + i, y + j) || block[idx(x + i, y + j)] !== 0 || taken.has(idx(x + i, y + j))) return false; } return true; };
-  for (let r = 0; r < 7; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+  for (let r = 0; r < reach; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
     if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
     const x = cx + dx, y = cy + dy;
     if (free(x, y)) {
@@ -152,8 +154,10 @@ export function placeRect(lat: number, lon: number, w: number, h: number): Rect 
       return { x, y, w, h };
     }
   }
-  return { x: cx, y: cy, w, h };
+  return strict ? null : { x: cx, y: cy, w, h };
 }
+/** True when a tile already holds a site. */
+export const isSite = (x: number, y: number) => taken.has(idx(x, y));
 export const isTaken = (x: number, y: number) => clear.has(idx(x, y));
 
 /** Small deterministic hash for scattering scenery and tinting tiles. */
