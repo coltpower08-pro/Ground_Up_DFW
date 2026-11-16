@@ -35,6 +35,38 @@ describe('road network', () => {
     for (let h = 0; h < q.length; h++) for (const n of adj.get(q[h]) ?? []) if (!seen.has(n)) { seen.add(n); q.push(n); }
     expect(adj.size - seen.size).toBe(0);
   });
+  it('no highway or named arterial ends in the middle of nowhere', () => {
+    const W = 96, H = 76, bad: string[] = [];
+    for (const r of ROADS) for (const end of [r.pts[0], r.pts[r.pts.length - 1]]) {
+      const edge = end[0] < 0.6 || end[1] < 0.6 || end[0] > W - 0.6 || end[1] > H - 0.6;
+      const meets = ROADS.some((o) => o !== r && dLine(end, o.pts) < 0.25);
+      const loop = r.pts.length > 3 && Math.hypot(r.pts[0][0] - r.pts[r.pts.length - 1][0], r.pts[0][1] - r.pts[r.pts.length - 1][1]) < 0.01;
+      if (!edge && !meets && !loop) bad.push(`${r.name} ends at ${end[0].toFixed(1)},${end[1].toFixed(1)}`);
+    }
+    expect(bad).toEqual([]);
+  });
+  it('no surface street dead-ends: each end meets another street, a highway, the map edge, or a site it serves', () => {
+    const W = 96, H = 76, deg = new Map<string, number>(), bump = (x: number, y: number) => deg.set(`${x},${y}`, (deg.get(`${x},${y}`) ?? 0) + 1);
+    for (const s of net.segs) { const dx = Math.sign(s.b[0] - s.a[0]), dy = Math.sign(s.b[1] - s.a[1]); for (let x = s.a[0], y = s.a[1]; x !== s.b[0] || y !== s.b[1]; x += dx, y += dy) { bump(x, y); bump(x + dx, y + dy); } }
+    const loose: string[] = [], served: string[] = [];
+    for (const [k, n] of deg) {
+      if (n !== 1) continue;
+      const [x, y] = k.split(',').map(Number);
+      if (x <= 0 || y <= 0 || x >= W || y >= H) continue;
+      if (ROADS.some((r) => dLine([x, y], r.pts) < 0.36)) continue;
+      if (parcels.some((p) => x >= p.tile.x && x <= p.tile.x + p.tile.w && y >= p.tile.y && y <= p.tile.y + p.tile.h)) { served.push(k); continue; }
+      loose.push(k);
+    }
+    expect(loose).toEqual([]);
+    expect(served.length, `cul-de-sacs at sites: ${served}`).toBeLessThanOrEqual(6);
+  });
+  it('streets run in whole lines: arterials every fourth line, and long straight runs', () => {
+    const art = net.segs.filter((s) => s.cls === 'arterial'), len = (s: { a: XY; b: XY }) => Math.abs(s.b[0] - s.a[0]) + Math.abs(s.b[1] - s.a[1]);
+    const total = net.segs.reduce((a, s) => a + len(s), 0);
+    expect(art.reduce((a, s) => a + len(s), 0) / total).toBeGreaterThan(0.3);
+    // very few one-tile stubs
+    expect(net.segs.filter((s) => len(s) === 1).length / net.segs.length).toBeLessThan(0.2);
+  });
   it('no surface road runs through a lake or across an airfield', () => {
     const bad: string[] = [];
     for (const s of [...net.segs.map((x) => [x.a, x.b] as XY[]), ...net.frontage]) for (let i = 0; i < s.length - 1; i++) for (let t = 0.05; t < 1; t += 0.1) {

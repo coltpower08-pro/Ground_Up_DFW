@@ -121,7 +121,7 @@ export function generateSites(districtOf: (x: number, y: number) => string, exis
       } as Record<Use, string>)[use] + zoneNote + (floodPct > 0.1 ? ' Part of it floods.' : '');
       const fit = (Object.keys(c.s) as Use[]).filter((t) => t === use || c.s[t] >= 0.6).sort((a, b) => (a === use ? -1 : b === use ? 1 : c.s[b] - c.s[a]));
       land.push({
-        id: `g-${use}-${i}`, name, area: `${k.city}${near}`, district: c.d, acres, askPsf, zoning, floodPct, water: served, sewer: served && !(rural && r(8) < 0.5), access: 3, rail: k.rail < 0.9 && (use === 'spec' || use === 'ios'), offMarket, blurb, tile, fit: fit as DealType[],
+        id: `g-${use}-${c.x}-${c.y}`, name, area: `${k.city}${near}`, district: c.d, acres, askPsf, zoning, floodPct, water: served, sewer: served && !(rural && r(8) < 0.5), access: 3, rail: k.rail < 0.9 && (use === 'spec' || use === 'ios'), offMarket, blurb, tile, fit: fit as DealType[],
         hidden: { env: (use === 'spec' || use === 'ios') && k.ind > 0.15 ? (r(9) < 0.2 ? 'major' : r(9) < 0.5 ? 'minor' : 'none') : r(9) < 0.1 ? 'minor' : 'none', soils: r(10) < 0.35 ? 'expansive' : 'good', easementAcres: r(11) < 0.2 ? Math.round(acres * 0.06 * 10) / 10 : 0 },
       });
     });
@@ -151,7 +151,7 @@ export function generateSites(districtOf: (x: number, y: number) => string, exis
       const story = ['Full, with long leases and nothing to fix. Safe, and priced like it.', 'Full today, but the rent is well under market and the lease is nearly up. The upside is the renewal; the risk is the tenant leaving.', 'Half of it is dark. You are paying a discount for the empty space.', 'Empty and worn out. Cheap, and every dollar of the upside has to be earned.', 'Leased, but tired. Expect a repair bill and softer rents until it is fixed up.'][profile];
       const mfStory = [`${Math.round(occ! * 100)}% occupied and well kept.`, `${Math.round(occ! * 100)}% occupied, with rents a little behind the newer places nearby.`, 'One unit in five is empty.', 'A third of the units are empty and the rest need new kitchens.', 'Mostly full, with a long list of repairs the owner has put off.'][profile];
       buildings.push({
-        id: `gx-${use}-${i}`, name, area: k.city, district: c.d, acres, askPsf: 0, zoning: use === 'ios' || use === 'spec' ? 'I' : 'C', floodPct: 0, water: true, sewer: true, access: 3, rail: false, offMarket: false, tile, fit: [use] as DealType[],
+        id: `gx-${use}-${c.x}-${c.y}`, name, area: k.city, district: c.d, acres, askPsf: 0, zoning: use === 'ios' || use === 'spec' ? 'I' : 'C', floodPct: 0, water: true, sewer: true, access: 3, rail: false, offMarket: false, tile, fit: [use] as DealType[],
         blurb: `${what[0].toUpperCase()}${what.slice(1)}. ${use === 'mf' ? mfStory : story}`, hidden: { env: 'none', soils: 'good', easementAcres: 0 },
         existing: { type: use as DealType, sf, cond: tired ? 'tired' : 'good', deferred, occ, leases },
       });

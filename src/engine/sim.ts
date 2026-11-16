@@ -4,7 +4,7 @@ import { ACHIEVEMENTS } from '../content/achievements';
 import { siteDataOf } from '../content/world';
 import { demandFor, freshTypes, stepMarket } from './market';
 import { WORLD_EVENTS } from '../content/events';
-import { BUYERS, RIVALS, TENANTS, makeNpcs, makeParcels } from '../content/world';
+import { BUYERS, MAP_REV, RIVALS, TENANTS, makeNpcs, makeParcels } from '../content/world';
 import { accrue, contributeTier, denseFlows, irrAnnual, payOut, sizePermLoan } from './finance';
 import { ATTORNEY_FEE, COMMON, CYCLE, CYCLE_NEXT, ENT, IOS, MF_FULL, OUTREACH_COST, PERM, PRODUCTS, REPORTS, SPEC, STAFF, TERMS, TYPE_LABEL, ACRE_RANGE } from './params';
 import { askPrice, baseCap, computeProforma, districtOf, entitlementKind, explainGrade, existingLeased, existingMarketNoi, getNpc, getParcel, makeAcct, usableAcres } from './proforma';
@@ -35,7 +35,17 @@ export function migrate(g: Game): Game {
   g.achievements ??= []; g.unlocked ??= ['ios', 'spec']; g.career ??= 0; g.player ??= '';
   if (!g.market.idx) Object.assign(g.market, freshTypes());
   for (const d of g.deals) { d.acq ??= false; d.reno ??= 'asis'; d.occ ??= 0; if (d.uw) { d.uw.leaseUp ??= d.type === 'ios' ? 3 : 6; d.uw.holdMonths ??= 6; } }
-  const all = makeParcels(), have = new Set(g.parcels.map((p) => p.id)), fresh = all.filter((p) => !have.has(p.id));
+  const all = makeParcels();
+  if ((g.map ?? 1) < MAP_REV) {
+    // the map was redrawn: rule-built sites nobody has touched are replaced by today's; ones in a deal stay exactly as they were
+    const busy = new Set(g.deals.filter((d) => d.phase !== 'dead').map((d) => d.parcelId));
+    g.parcels = g.parcels.filter((p) => !/^gx?-/.test(p.id) || busy.has(p.id));
+    for (const p of g.parcels) { const f = all.find((x) => x.id === p.id); if (f && !/^gx?-/.test(p.id)) p.tile = f.tile; }
+    g.map = MAP_REV;
+  }
+  const hits = (a: Parcel['tile'], b: Parcel['tile']) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  const have = new Set(g.parcels.map((p) => p.id)), old = g.parcels.filter((p) => !all.some((x) => x.id === p.id));
+  const fresh = all.filter((p) => !have.has(p.id) && !old.some((o) => hits(o.tile, p.tile)));
   // facts that come from the map itself (road access, what the location suits, what unsold land is worth) follow the current map
   for (const p of g.parcels) { const f = all.find((x) => x.id === p.id); if (f) { p.access = f.access; p.fit = f.fit; if (!p.existing && p.status === 'available') p.askPsf = f.askPsf; } }
   if (fresh.length) { g.parcels.push(...fresh); initExisting(g, (p) => fresh.includes(p)); }
@@ -44,7 +54,7 @@ export function migrate(g: Game): Game {
 
 export function newGame(seed = Date.now() % 2147483647, firmName = 'Your Development Co.', difficulty: Game['difficulty'] = 'rookie', career: Game['career'] = 0, player = ''): Game {
   const g: Game = {
-    version: 3, seed, rng: seed, difficulty, firmName, day: 0, cash: 450000, attention: 4,
+    version: 3, map: MAP_REV, seed, rng: seed, difficulty, firmName, day: 0, cash: 450000, attention: 4,
     rep: { investors: 35, lenders: 35, city: 35, brokers: 45, tenants: 30 }, trackRecord: 0,
     market: { iosRent: 4100, indRent: 8.1, iosCap: 0.0765, indCap: 0.0625, landIndex: 1, costIndex: 1, baseRate: 0.045, ...freshTypes() },
     marketHistory: [{ m: 0, iosRent: 4100, indRent: 8.1, retail: 1, office: 1, mf: 1 }],

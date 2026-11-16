@@ -4,7 +4,7 @@
 //
 // Surface roads run along tile boundaries (a tile is about three-quarters of a mile), which is how
 // the real North Texas section-line grid works, and it guarantees no road ever cuts through a site.
-import { AIRPORTS, H, LAKES, RIVERS, ROADS, W, hash, industry, urbanity, type Rect, type XY } from '../render/layout';
+import { AIRPORTS, H, LAKES, ROADS, W, industry, urbanity, type Rect, type XY } from '../render/layout';
 
 export type RoadClass = 'interstate' | 'highway' | 'arterial' | 'collector' | 'local';
 export const MILES_PER_TILE = 0.75;
@@ -69,35 +69,28 @@ export function buildRoadNet(sites: { id: string; tile: Rect }[]): RoadNet {
   for (let y = 0; y <= H; y++) for (let x = 0; x < W; x++) if (blockedPt(x + 0.5, y) || blockedPt(x + 0.15, y) || blockedPt(x + 0.85, y)) hBan[hi(x, y)] = 1;
   for (let y = 0; y < H; y++) for (let x = 0; x <= W; x++) if (blockedPt(x, y + 0.5) || blockedPt(x, y + 0.15) || blockedPt(x, y + 0.85)) vBan[vi(x, y)] = 1;
 
-  // --- the grid: every line downtown, every other line in the suburbs, every fourth (the old farm roads) in the country ---
+  // a freeway already running along a grid line replaces the surface road there
+  const along = (a: XY, b: XY) => FREEWAYS.some((r) => distToLine(a, r.pts) < 0.28 && distToLine(b, r.pts) < 0.28 && distToLine([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], r.pts) < 0.28);
+  for (let y = 0; y <= H; y++) for (let x = 0; x < W; x++) if (along([x, y], [x + 1, y])) hBan[hi(x, y)] = 1;
+  for (let y = 0; y < H; y++) for (let x = 0; x <= W; x++) if (along([x, y], [x, y + 1])) vBan[vi(x, y)] = 1;
+
+  // --- the grid ---
+  // Arterials run on every fourth line (the old three-mile farm roads), edge to edge. Each square between them is
+  // then filled in as a whole: every line downtown, the middle line in the suburbs, nothing in open country.
+  // Whole lines only, so a street always runs from one arterial to the next and never stops in a field.
   const dense = (x: number, y: number) => (x < 0 || y < 0 || x >= W || y >= H ? 0 : Math.max(urbanity(x, y), industry(x, y) * 1.6));
-  const want = (line: number, u: number, x: number, y: number, s: number) => {
-    const step = u > 0.5 ? 1 : u > 0.18 ? 2 : 4;
-    if (line % step !== 0) return 0;
-    if (line % 4 === 0) return 3;
-    return step === 4 || (u < 0.3 && hash(x, y, s) < 0.18) ? 0 : 2; // a few gaps keep the suburbs from looking like graph paper
-  };
-  for (let y = 1; y < H; y++) for (let x = 0; x < W; x++) {
-    if (hBan[hi(x, y)]) continue;
-    const a: XY = [x, y], b: XY = [x + 1, y], m: XY = [x + 0.5, y];
-    const c = want(y, Math.max(dense(x, y - 1), dense(x, y)), x, y, 301);
-    if (!c) continue;
-    // a freeway already running along this line replaces the surface road; one that crosses it gets an overpass
-    if (FREEWAYS.some((r) => distToLine(m, r.pts) < 0.3 && !hitsLine(a, b, r.pts))) continue;
-    if (RIVERS.some((r) => hitsLine(a, b, r)) && c < 3 && hash(x, y, 302) > 0.3) continue; // few bridges
-    hEdge[hi(x, y)] = c;
-  }
-  for (let y = 0; y < H; y++) for (let x = 1; x < W; x++) {
-    if (vBan[vi(x, y)]) continue;
-    const a: XY = [x, y], b: XY = [x, y + 1], m: XY = [x, y + 0.5];
-    const c = want(x, Math.max(dense(x - 1, y), dense(x, y)), x, y, 303);
-    if (!c) continue;
-    if (FREEWAYS.some((r) => distToLine(m, r.pts) < 0.3 && !hitsLine(a, b, r.pts))) continue;
-    if (RIVERS.some((r) => hitsLine(a, b, r)) && c < 3 && hash(x, y, 304) > 0.3) continue;
-    vEdge[vi(x, y)] = c;
+  const setH = (x: number, y: number, c: number) => { if (x >= 0 && x < W && y > 0 && y < H && !hBan[hi(x, y)] && hEdge[hi(x, y)] < c) hEdge[hi(x, y)] = c; };
+  const setV = (x: number, y: number, c: number) => { if (y >= 0 && y < H && x > 0 && x < W && !vBan[vi(x, y)] && vEdge[vi(x, y)] < c) vEdge[vi(x, y)] = c; };
+  for (let y = 4; y < H; y += 4) for (let x = 0; x < W; x++) setH(x, y, 3);
+  for (let x = 4; x < W; x += 4) for (let y = 0; y < H; y++) setV(x, y, 3);
+  for (let by = 0; by < H; by += 4) for (let bx = 0; bx < W; bx += 4) {
+    let u = 0;
+    for (let y = by; y < by + 4; y++) for (let x = bx; x < bx + 4; x++) u = Math.max(u, dense(x, y));
+    const lines = u > 0.5 ? [1, 2, 3] : u > 0.18 ? [2] : [];
+    for (const l of lines) { for (let x = bx; x < bx + 4; x++) setH(x, by + l, 2); for (let y = by; y < by + 4; y++) setV(bx + l, y, 2); }
   }
 
-  // lattice helpers: the four edges at a vertex, as [edge array, index, neighbour x, neighbour y]
+  // lattice helpers: the four edges at a vertex, as [edge array, ban array, index, neighbour x, neighbour y]
   const legs = (x: number, y: number): [Uint8Array, Uint8Array, number, number, number][] => {
     const out: [Uint8Array, Uint8Array, number, number, number][] = [];
     if (x < W && y >= 0 && y <= H) out.push([hEdge, hBan, hi(x, y), x + 1, y]);
@@ -108,6 +101,45 @@ export function buildRoadNet(sites: { id: string; tile: Rect }[]): RoadNet {
   };
   const vid = (x: number, y: number) => y * (W + 1) + x;
   const hasRoad = (x: number, y: number) => legs(x, y).some(([e, , i]) => e[i] > 0);
+  const onBorder = (x: number, y: number) => x <= 0 || y <= 0 || x >= W || y >= H;
+  // a road may end where it meets a freeway or one of the named diagonal arterials
+  const meetsHighway = (x: number, y: number) => ROADS.some((r) => distToLine([x, y], r.pts) < 0.36);
+
+  /**
+   * No loose ends. A road that stops short (at a lake, an airfield, or a site that sits across its line) is first
+   * carried around the obstacle to the next road. If there is no way round within a few blocks, it is taken back
+   * to the last intersection. `keep` marks ends that must stay: the access road to a site with no other way in.
+   */
+  const tidy = (keep: Set<number>, reachMax: number) => {
+    for (let pass = 0; pass < 60; pass++) {
+      let changed = false;
+      for (let y = 0; y <= H; y++) for (let x = 0; x <= W; x++) {
+        const mine = legs(x, y).filter(([e, , i]) => e[i] > 0);
+        if (mine.length !== 1 || onBorder(x, y) || meetsHighway(x, y)) continue;
+        const [e0, , i0, bx, by] = mine[0], cls = e0[i0];
+        // look for a way round: open ground only, to any road that is not the one we came down
+        const prev = new Map<number, number>([[vid(x, y), -1]]), depth = new Map<number, number>([[vid(x, y), 0]]), q = [vid(x, y)];
+        let goal = -1;
+        for (let h = 0; h < q.length && goal < 0; h++) {
+          const k = q[h], kx = k % (W + 1), ky = Math.floor(k / (W + 1)), dk = depth.get(k)!;
+          if (dk >= reachMax) continue;
+          for (const [e, ban, i, nx, ny] of legs(kx, ky)) {
+            const n = vid(nx, ny);
+            if (ban[i] || e[i] || prev.has(n) || (nx === bx && ny === by)) continue;
+            prev.set(n, k); depth.set(n, dk + 1);
+            if (hasRoad(nx, ny) || onBorder(nx, ny)) { goal = n; break; }
+            q.push(n);
+          }
+        }
+        if (goal >= 0) {
+          for (let c = goal; prev.get(c)! >= 0; c = prev.get(c)!) { const pv = prev.get(c)!, px = pv % (W + 1), py = Math.floor(pv / (W + 1)), cx = c % (W + 1), cy = Math.floor(c / (W + 1)); if (py === cy) hEdge[hi(Math.min(px, cx), cy)] = cls; else vEdge[vi(cx, Math.min(py, cy))] = cls; }
+          changed = true;
+        } else if (!keep.has(vid(x, y))) { e0[i0] = 0; changed = true; }
+      }
+      if (!changed) break;
+    }
+  };
+  tidy(new Set(), 3);
 
   // --- interchanges: where a surface road crosses a freeway ---
   const ramp = new Map<number, { name: string; interstate: boolean }>();
@@ -119,16 +151,13 @@ export function buildRoadNet(sites: { id: string; tile: Rect }[]): RoadNet {
     for (let y = 0; y <= H; y++) for (let x = 0; x < W; x++) if (hEdge[hi(x, y)]) markRamp([x, y], [x + 1, y]);
     for (let y = 0; y < H; y++) for (let x = 0; x <= W; x++) if (vEdge[vi(x, y)]) markRamp([x, y], [x, y + 1]);
   };
-  scanRamps();
-
-  // every grid road must lead to a freeway: join stranded pieces to the main network with a local road
   const reach = () => {
     const d = new Float32Array((W + 1) * (H + 1)).fill(1e9), q: number[] = [];
     for (const k of ramp.keys()) { d[k] = 0; q.push(k); }
     for (let h = 0; h < q.length; h++) { const k = q[h], x = k % (W + 1), y = Math.floor(k / (W + 1)); for (const [e, , i, nx, ny] of legs(x, y)) if (e[i] && d[vid(nx, ny)] > d[k] + 1) { d[vid(nx, ny)] = d[k] + 1; q.push(vid(nx, ny)); } }
     return d;
   };
-  /** Lay a local road from (sx, sy) across open ground to the nearest vertex that satisfies `goal`. */
+  /** Lay a local road from the start points across open ground to the nearest vertex that satisfies `goal`. */
   const connect = (starts: XY[], goal: (x: number, y: number) => boolean): boolean => {
     const prev = new Map<number, number>(), q: number[] = [];
     for (const [x, y] of starts) { prev.set(vid(x, y), -1); q.push(vid(x, y)); }
@@ -142,40 +171,53 @@ export function buildRoadNet(sites: { id: string; tile: Rect }[]): RoadNet {
     }
     return false;
   };
-  for (let pass = 0; pass < 40; pass++) {
-    const d = reach();
-    let stray: XY | null = null;
-    for (let y = 0; y <= H && !stray; y++) for (let x = 0; x <= W; x++) if (d[vid(x, y)] > 1e8 && hasRoad(x, y)) { stray = [x, y]; break; }
-    if (!stray) break;
-    connect([stray], (x, y) => d[vid(x, y)] < 1e8);
-    scanRamps();
-  }
+  const joinStrays = () => {
+    for (let pass = 0; pass < 200; pass++) {
+      scanRamps();
+      const d = reach();
+      let stray: XY | null = null;
+      for (let y = 0; y <= H && !stray; y++) for (let x = 0; x <= W; x++) if (d[vid(x, y)] > 1e8 && hasRoad(x, y)) { stray = [x, y]; break; }
+      if (!stray || !connect([stray], (x, y) => d[vid(x, y)] < 1e8)) break;
+    }
+  };
 
-  // --- site access: every site gets a road on at least one side, tied into the network ---
+  // --- site access: every site gets a through road on at least one side ---
   const sideEdges = (t: Rect, side: SiteRoad['side']): [Uint8Array, number][] => {
     const out: [Uint8Array, number][] = [];
     if (side === 'S' || side === 'N') { const y = side === 'S' ? t.y + t.h : t.y; for (let x = t.x; x < t.x + t.w; x++) out.push([hEdge, hi(x, y)]); }
     else { const x = side === 'E' ? t.x + t.w : t.x; for (let y = t.y; y < t.y + t.h; y++) out.push([vEdge, vi(x, y)]); }
     return out;
   };
-  const sideBan = (t: Rect, side: SiteRoad['side']) => (side === 'S' || side === 'N' ? [...Array(t.w)].some((_, i) => hBan[hi(t.x + i, side === 'S' ? t.y + t.h : t.y)]) : [...Array(t.h)].some((_, i) => vBan[vi(side === 'E' ? t.x + t.w : t.x, t.y + i)]));
   const sideCls = (t: Rect, side: SiteRoad['side']) => { const e = sideEdges(t, side); return e.every(([a, i]) => a[i] > 0) ? Math.min(...e.map(([a, i]) => a[i])) : 0; };
   const SIDES: SiteRoad['side'][] = ['S', 'E', 'W', 'N'];
+  /** The street along one side of a site, carried straight on in both directions until it meets another road. Null if something is in the way. */
+  const throughLine = (t: Rect, side: SiteRoad['side']): [Uint8Array, number][] | null => {
+    const horiz = side === 'S' || side === 'N', fixed = side === 'S' ? t.y + t.h : side === 'N' ? t.y : side === 'E' ? t.x + t.w : t.x;
+    if (fixed <= 0 || fixed >= (horiz ? H : W)) return null;
+    let lo = horiz ? t.x : t.y, hiEnd = horiz ? t.x + t.w : t.y + t.h;
+    const max = horiz ? W : H, at = (v: number): XY => (horiz ? [v, fixed] : [fixed, v]);
+    const edge = (v: number): [Uint8Array, Uint8Array, number] => (horiz ? [hEdge, hBan, hi(v, fixed)] : [vEdge, vBan, vi(fixed, v)]);
+    const out: [Uint8Array, number][] = [];
+    for (let v = lo; v < hiEnd; v++) { const [e, ban, i] = edge(v); if (ban[i]) return null; out.push([e, i]); }
+    for (let n = 0; lo > 0 && !hasRoad(...at(lo)) && !meetsHighway(...at(lo)); n++) { if (n > 7) return null; const [e, ban, i] = edge(lo - 1); if (ban[i]) return null; out.push([e, i]); lo--; }
+    for (let n = 0; hiEnd < max && !hasRoad(...at(hiEnd)) && !meetsHighway(...at(hiEnd)); n++) { if (n > 7) return null; const [e, ban, i] = edge(hiEnd); if (ban[i]) return null; out.push([e, i]); hiEnd++; }
+    return out;
+  };
+  const keep = new Set<number>();
   for (const s of sites) {
     const t = s.tile;
     if (SIDES.some((sd) => sideCls(t, sd) > 0)) continue;
-    const side = SIDES.find((sd) => !sideBan(t, sd)) ?? 'S';
-    for (const [a, i] of sideEdges(t, side)) if (!a[i]) a[i] = 1;
+    const options = SIDES.map((sd) => throughLine(t, sd)).filter((o): o is [Uint8Array, number][] => !!o).sort((a, b) => a.length - b.length);
+    if (options.length) { for (const [e, i] of options[0]) if (!e[i]) e[i] = 1; continue; }
+    // boxed in: a short access road along one side, tied to the nearest street, and allowed to end at the site
+    const side = SIDES.find((sd) => sideEdges(t, sd).every(([e, i]) => !(e === hEdge ? hBan : vBan)[i])) ?? 'S';
+    for (const [e, i] of sideEdges(t, side)) if (!e[i]) e[i] = 1;
+    for (let x = t.x; x <= t.x + t.w; x++) for (let y = t.y; y <= t.y + t.h; y++) keep.add(vid(x, y));
   }
-  // tie in any access road that does not yet reach a freeway
-  for (let pass = 0; pass < 200; pass++) {
-    const d = reach();
-    let stray: XY | null = null;
-    for (let y = 0; y <= H && !stray; y++) for (let x = 0; x <= W; x++) if (d[vid(x, y)] > 1e8 && hasRoad(x, y)) { stray = [x, y]; break; }
-    if (!stray) break;
-    if (!connect([stray], (x, y) => d[vid(x, y)] < 1e8)) break;
-    scanRamps();
-  }
+  joinStrays();
+  tidy(keep, 4);
+  joinStrays();
+  scanRamps();
 
   // --- drive distances to the nearest interchange, and to the nearest interstate ---
   const dijkstra = (only: (r: { interstate: boolean }) => boolean) => {
@@ -225,7 +267,7 @@ export function buildRoadNet(sites: { id: string; tile: Rect }[]): RoadNet {
         const [ax, ay] = r.pts[i], [bx, by] = r.pts[i + 1], len = Math.hypot(bx - ax, by - ay) || 1, nx = (-(by - ay) / len) * sgn, ny = ((bx - ax) / len) * sgn, n = Math.ceil(len * 2);
         for (let k = 0; k <= n; k++) {
           const px = ax + ((bx - ax) * k) / n + nx * 0.2, py = ay + ((by - ay) * k) / n + ny * 0.2, tx = Math.floor(px), ty = Math.floor(py);
-          const built = tx >= 0 && ty >= 0 && tx < W && ty < H && (urbanity(tx, ty) > 0.12 || industry(tx, ty) > 0.08) && !inLake(px, py, 1.15) && !inAirport(px, py);
+          const built = tx >= 0 && ty >= 0 && tx < W && ty < H && !inLake(px, py, 1.15) && !inAirport(px, py); // frontage roads run the full length of every interstate
           if (built) run.push([px, py]); else flush();
         }
       }

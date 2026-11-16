@@ -176,7 +176,12 @@ for (const p of ALL) {
   p.fit = keep.length ? keep : [meant ?? (Object.keys(worth) as DealType[]).sort((a, b) => worth[b] - worth[a])[0]];
 }
 /** The numbers that drive each property type at a site. */
-export const siteDataOf = (id: string): SiteData => SITE[id];
+const one = { rent: 1, demand: 1, ent: 0 };
+const PLAIN: SiteData = { traffic: 20000, rooftops: 12000, income: 85000, anchors: 1, jobs: 60000, amenities: 3, officeVac: 0.22, renters: 5000, medRent: 1650, jobGrowth: 2, schools: 5, labor: 300000, f: { ios: one, spec: one, retail: one, office: one, mf: one } };
+/** The numbers that drive each property type at a site. A site carried over from an older map gets plain, average numbers. */
+export const siteDataOf = (id: string): SiteData => SITE[id] ?? PLAIN;
+/** Bumped whenever sites or roads move, so older saves know to pick up the new map. */
+export const MAP_REV = 2;
 /** Frontage, corner and distance to a freeway for a site. */
 export const roadOf = (id: string): SiteRoad => NET.site[id];
 

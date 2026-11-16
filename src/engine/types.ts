@@ -238,6 +238,8 @@ export interface Market {
 
 export interface Game {
   version: number;
+  /** Which revision of the map this save was last brought up to. */
+  map?: number;
   seed: number;
   rng: number;
   difficulty: 'rookie' | 'pro';
