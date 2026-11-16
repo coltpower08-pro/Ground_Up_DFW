@@ -72,9 +72,9 @@ export const TERMS = {
 
 /** Asset classes beyond industrial. noiPsf is stabilized net income per building SF per year. */
 export const PRODUCTS = {
-  retail: { label: 'Shopping center', far: 0.22, cost: 185, noiPsf: 23.5, cap: 0.069, softPct: 0.14, tiPsf: 22, lcPct: 0.06, months: 9, leaseUp: 7, minAcres: 2, maxAcres: 14, arrival: 0.42, premiumCost: 14, premiumRent: 1.06, ti: [15, 30], terms: [60, 120], free: [2, 3, 4] },
-  office: { label: 'Office building', far: 0.4, cost: 205, noiPsf: 24.5, cap: 0.074, softPct: 0.15, tiPsf: 38, lcPct: 0.06, months: 13, leaseUp: 12, minAcres: 2, maxAcres: 10, arrival: 0.24, premiumCost: 18, premiumRent: 1.07, ti: [28, 48], terms: [60, 84], free: [4, 6, 8] },
-  mf: { label: 'Apartments', far: 0.5, cost: 158, noiPsf: 12.6, cap: 0.051, softPct: 0.14, tiPsf: 1.5, lcPct: 0, months: 15, leaseUp: 10, minAcres: 5, maxAcres: 25, arrival: 0, premiumCost: 12, premiumRent: 1.06, ti: [0, 0], terms: [12], free: [0] },
+  retail: { label: 'Shopping center', far: 0.22, cost: 185, noiPsf: 24.2, cap: 0.069, softPct: 0.14, tiPsf: 22, lcPct: 0.06, months: 9, leaseUp: 7, minAcres: 2, maxAcres: 14, arrival: 0.42, premiumCost: 14, premiumRent: 1.06, ti: [15, 30], terms: [60, 120], free: [2, 3, 4] },
+  office: { label: 'Office building', far: 0.4, cost: 195, noiPsf: 28.8, cap: 0.074, softPct: 0.15, tiPsf: 34, lcPct: 0.06, months: 13, leaseUp: 12, minAcres: 2, maxAcres: 10, arrival: 0.24, premiumCost: 18, premiumRent: 1.07, ti: [28, 48], terms: [60, 84], free: [4, 6, 8] },
+  mf: { label: 'Apartments', far: 0.5, cost: 158, noiPsf: 13.6, cap: 0.051, softPct: 0.14, tiPsf: 1.5, lcPct: 0, months: 15, leaseUp: 10, minAcres: 5, maxAcres: 25, arrival: 0, premiumCost: 12, premiumRent: 1.06, ti: [0, 0], terms: [12], free: [0] },
 } as const;
 export type ProductKey = keyof typeof PRODUCTS;
 export const MF_UNIT_SF = 900, MF_FULL = 0.94;

@@ -1,11 +1,13 @@
 // The simulation: player actions, the daily clock, and the month-end close.
 // Every function mutates the Game object passed in. Nothing here touches the UI.
 import { ACHIEVEMENTS } from '../content/achievements';
+import { siteDataOf } from '../content/world';
+import { demandFor, freshTypes, stepMarket } from './market';
 import { WORLD_EVENTS } from '../content/events';
 import { BUYERS, RIVALS, TENANTS, makeNpcs, makeParcels } from '../content/world';
 import { accrue, contributeTier, denseFlows, irrAnnual, payOut, sizePermLoan } from './finance';
 import { ATTORNEY_FEE, COMMON, CYCLE, CYCLE_NEXT, ENT, IOS, MF_FULL, OUTREACH_COST, PERM, PRODUCTS, REPORTS, SPEC, STAFF, TERMS, TYPE_LABEL, ACRE_RANGE } from './params';
-import { askPrice, baseCap, computeProforma, districtOf, entitlementKind, existingLeased, existingMarketNoi, getNpc, getParcel, makeAcct, usableAcres } from './proforma';
+import { askPrice, baseCap, computeProforma, districtOf, entitlementKind, explainGrade, existingLeased, existingMarketNoi, getNpc, getParcel, makeAcct, usableAcres } from './proforma';
 import { between, chance, pick, rand } from './rng';
 import {
   DAYS_PER_MONTH, LOC_LIMIT, MAX_ACTIVE, OVERHEAD,
@@ -31,10 +33,11 @@ function initExisting(g: Game, only?: (p: Parcel) => boolean) {
 /** Bring a save from an earlier build up to date. */
 export function migrate(g: Game): Game {
   g.achievements ??= []; g.unlocked ??= ['ios', 'spec']; g.career ??= 0; g.player ??= '';
+  if (!g.market.idx) Object.assign(g.market, freshTypes());
   for (const d of g.deals) { d.acq ??= false; d.reno ??= 'asis'; d.occ ??= 0; if (d.uw) { d.uw.leaseUp ??= d.type === 'ios' ? 3 : 6; d.uw.holdMonths ??= 6; } }
   const all = makeParcels(), have = new Set(g.parcels.map((p) => p.id)), fresh = all.filter((p) => !have.has(p.id));
-  // facts that come from the map itself (road access, what the location suits) follow the current map
-  for (const p of g.parcels) { const f = all.find((x) => x.id === p.id); if (f) { p.access = f.access; p.fit = f.fit; } }
+  // facts that come from the map itself (road access, what the location suits, what unsold land is worth) follow the current map
+  for (const p of g.parcels) { const f = all.find((x) => x.id === p.id); if (f) { p.access = f.access; p.fit = f.fit; if (!p.existing && p.status === 'available') p.askPsf = f.askPsf; } }
   if (fresh.length) { g.parcels.push(...fresh); initExisting(g, (p) => fresh.includes(p)); }
   return g;
 }
@@ -43,8 +46,8 @@ export function newGame(seed = Date.now() % 2147483647, firmName = 'Your Develop
   const g: Game = {
     version: 3, seed, rng: seed, difficulty, firmName, day: 0, cash: 450000, attention: 4,
     rep: { investors: 35, lenders: 35, city: 35, brokers: 45, tenants: 30 }, trackRecord: 0,
-    market: { iosRent: 4100, indRent: 8.1, iosCap: 0.0765, indCap: 0.0625, landIndex: 1, costIndex: 1, baseRate: 0.045 },
-    marketHistory: [{ m: 0, iosRent: 4100, indRent: 8.1 }],
+    market: { iosRent: 4100, indRent: 8.1, iosCap: 0.0765, indCap: 0.0625, landIndex: 1, costIndex: 1, baseRate: 0.045, ...freshTypes() },
+    marketHistory: [{ m: 0, iosRent: 4100, indRent: 8.1, retail: 1, office: 1, mf: 1 }],
     parcels: makeParcels(), npcs: makeNpcs(), deals: [], decisions: [], nextId: 1,
     news: [{ day: 0, text: 'You open your own development shop with $450k and one good broker friend.', tone: 'info' }],
     almanac: ['ios', 'lpgp'], stats: { feesEarned: 0, promoteEarned: 0, lpDistributed: 0, deadDealCosts: 0 },
@@ -179,6 +182,12 @@ export function previewProforma(g: Game, parcelId: string, type: DealType, price
   return computeProforma(g, blankDeal(g, p, p.existing?.type ?? type, price, 'preview'));
 }
 
+/** Why a first look at this price earns its grade. */
+export function previewWhy(g: Game, parcelId: string, type: DealType, price: number): string[] {
+  const p = getParcel(g, parcelId), d = blankDeal(g, p, p.existing?.type ?? type, price, 'preview');
+  return explainGrade(g, d, computeProforma(g, d));
+}
+
 export function makeOffer(g: Game, parcelId: string, type: DealType, price: number): Result {
   const p = getParcel(g, parcelId);
   if (p.status !== 'available') return no('That site is no longer available.');
@@ -202,7 +211,8 @@ export function makeOffer(g: Game, parcelId: string, type: DealType, price: numb
   g.deals.push(d);
   log(g, d, `Under contract at ${$(price)}. Earnest money ${$(earnest)} posted.`);
   news(g, `${p.name} is under contract at ${$(price)}.`, 'good');
-  unlock(g, 'loi', 'earnest', 'dd', 'floodplain');
+  unlock(g, 'loi', 'earnest', 'dd', 'floodplain', 'frontage', 'interchange', 'hbu', 'residual', 'hurdle', 'vacancy', 'absorption');
+  unlock(g, ...(type === 'retail' ? ['traffic', 'rooftops', 'anchor', 'hardcorner'] : type === 'office' ? ['officejobs', 'classa'] : type === 'mf' ? ['renters', 'schools'] : ['laborpool']));
   bumpRep(g, 'brokers', 1);
   return ok(`Offer accepted at ${$(price)}. You have 60 days of due diligence.`);
 }
@@ -314,7 +324,7 @@ function enterPredev(g: Game, d: Deal) {
 
 export function entOdds(g: Game, d: Deal, attorney: boolean, outreach: boolean): number {
   const base = ENT[d.ent.kind].odds + d.ent.attempts * 0.15;
-  return clamp(base + (attorney ? 0.2 : 0) + (outreach ? 0.1 : 0) + (getNpc(g, 'vega').rel - 30) / 250 + (g.rep.city - 35) / 400 + districtOf(g, d).ent - (d.type === 'mf' ? 0.1 : 0), 0.05, 0.97);
+  return clamp(base + (attorney ? 0.2 : 0) + (outreach ? 0.1 : 0) + (getNpc(g, 'vega').rel - 30) / 250 + (g.rep.city - 35) / 400 + districtOf(g, d).ent + siteDataOf(d.parcelId).f[d.type].ent - (d.type === 'mf' ? 0.1 : 0), 0.05, 0.97);
 }
 
 export function startEntitlement(g: Game, id: string, attorney: boolean, outreach: boolean): Result {
@@ -456,7 +466,7 @@ function arrivalOdds(g: Game, d: Deal): number {
   const base = d.type === 'ios' ? IOS.arrival : d.type === 'spec' ? SPEC.arrival : PRODUCTS[d.type].arrival;
   const pre = d.phase === 'construction' && !d.acq ? 0.5 : 1;
   const cyc = g.difficulty === 'pro' ? CYCLE[g.cycle.phase].demand : 1;
-  return clamp(base * districtOf(g, d).demand * askF * quality * pre * cyc * (g.staff.leasing ? 1.3 : 1) * (0.7 + getNpc(g, 'priya').rel * 0.006) * (0.85 + g.rep.tenants / 200), 0.02, 0.95);
+  return clamp(base * demandFor(g, getParcel(g, d.parcelId), d.type) * askF * quality * pre * cyc * (g.staff.leasing ? 1.3 : 1) * (0.7 + getNpc(g, 'priya').rel * 0.006) * (0.85 + g.rep.tenants / 200), 0.02, 0.95);
 }
 
 function makeProspect(g: Game, d: Deal): Prospect {
@@ -886,7 +896,7 @@ function monthClose(g: Game) {
     if (d.type === 'mf' && d.phase !== 'construction') {
       const askF = d.askFactor <= 0.95 ? 1.4 : d.askFactor <= 1 ? 1 : d.askFactor <= 1.05 ? 0.6 : 0.3;
       const target = d.askFactor > 1.05 ? 0.86 : d.askFactor > 1 ? 0.91 : 0.95;
-      const pace = 0.095 * askF * districtOf(g, d).demand * (g.staff.leasing ? 1.3 : 1) * (d.spec.extras || d.reno === 'reposition' ? 1.15 : 1) * (g.difficulty === 'pro' ? CYCLE[g.cycle.phase].demand : 1);
+      const pace = 0.095 * askF * demandFor(g, getParcel(g, d.parcelId), 'mf') * (g.staff.leasing ? 1.3 : 1) * (d.spec.extras || d.reno === 'reposition' ? 1.15 : 1) * (g.difficulty === 'pro' ? CYCLE[g.cycle.phase].demand : 1);
       d.occ = d.occ < target ? Math.min(target, d.occ + pace) : Math.max(target, d.occ - 0.02);
       if (d.phase === 'leasing' && fullyLeased(d)) { d.phase = 'operations'; notice(g, 'Stabilized', `${d.name} has reached ${Math.round(d.occ * 100)}% occupancy. Lenders and buyers now treat it as a stabilized property.`, d, { who: 'analyst', line: 'Apartments re-price every time a lease turns, so rent follows the market up and down faster than any other property type.' }); }
       else if (d.phase === 'operations' && !fullyLeased(d) && d.sale.stage === 'none') d.phase = 'leasing';
@@ -930,6 +940,7 @@ function monthClose(g: Game) {
   if (g.cash < 0) g.cash += g.cash * 0.0125;
   g.attention = 4;
   const mk = g.market;
+  stepMarket(g);
   if (g.difficulty === 'pro') {
     // Pro: a market cycle moves rents, cap rates, costs and interest rates together
     const c = CYCLE[g.cycle.phase];
@@ -954,7 +965,7 @@ function monthClose(g: Game) {
     mk.iosCap = clamp(mk.iosCap + between(g, -0.0002, 0.0002), 0.06, 0.085);
     mk.indCap = clamp(mk.indCap + between(g, -0.0002, 0.0002), 0.048, 0.07);
   }
-  g.marketHistory.push({ m, iosRent: mk.iosRent, indRent: mk.indRent });
+  g.marketHistory.push({ m, iosRent: mk.iosRent, indRent: mk.indRent, retail: mk.idx.retail, office: mk.idx.office, mf: mk.idx.mf });
   if (g.marketHistory.length > 120) g.marketHistory.shift();
   if (m > 2 && chance(g, 0.07)) { const e = pick(g, WORLD_EVENTS); e.apply(g); news(g, e.text, e.tone); }
   if (m > 5 && chance(g, 0.12)) {

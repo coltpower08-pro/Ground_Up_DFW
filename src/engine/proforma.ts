@@ -1,23 +1,25 @@
 // Underwriting: turns a parcel plus the player's design and capital choices into a
 // budget, returns and a deal score.
 import { accrue, irrAnnual, payOut, sizeConstructionLoan } from './finance';
-import { COMMON, ENT, IOS, MF_FULL, PRODUCTS, RENO, SF_PER_ACRE, SPEC, TERMS, type ProductKey } from './params';
-import { DISTRICTS } from '../content/world';
+import { COMMON, IOS, MF_FULL, PRODUCTS, RENO, SF_PER_ACRE, SPEC, TERMS, type ProductKey } from './params';
+import { districtCost } from '../content/sitedata';
+import { DISTRICTS, siteDataOf } from '../content/world';
+import { capFor, leaseUpBase, leaseUpFor } from './market';
 import type { Budget, Deal, DealType, EquityAcct, Game, Grade, Npc, Parcel, Proforma } from './types';
 
 export const getParcel = (g: Game, id: string): Parcel => g.parcels.find((p) => p.id === id)!;
 export const districtOf = (g: Game, d: Deal) => DISTRICTS[getParcel(g, d.parcelId).district];
-/** Market cap rate for this deal's property type in its district. */
-export const typeCap = (g: Game, type: DealType) => (type === 'ios' ? g.market.iosCap : type === 'spec' ? g.market.indCap : PRODUCTS[type].cap + (g.market.indCap - 0.0625));
-export const baseCap = (g: Game, d: Deal) => typeCap(g, d.type) + districtOf(g, d).cap;
-export const leaseUpOf = (type: DealType) => (type === 'ios' ? IOS.leaseUpMonths : type === 'spec' ? SPEC.leaseUpMonths : PRODUCTS[type].leaseUp);
+export { typeCap } from './market';
+export const baseCap = (g: Game, d: Deal) => capFor(g, getParcel(g, d.parcelId).district, d.type);
+export const leaseUpOf = leaseUpBase;
 
 /** Market rent per unit for a site before design choices: $/acre/month for yards, net $/SF/year for buildings. */
 export function rentBasis(g: Game, p: Parcel, type: DealType, usable: number): number {
-  const dist = DISTRICTS[p.district], access = COMMON.accessRent[p.access];
-  if (type === 'ios') return g.market.iosRent * dist.ios * access * (p.rail ? COMMON.railRent : 1) * Math.max(0.8, Math.min(1, 1 - (usable - 4) * 0.0225));
-  if (type === 'spec') return g.market.indRent * dist.ind * access;
-  return PRODUCTS[type].noiPsf * (g.market.indRent / 8.1) * dist.urban * access;
+  const dist = DISTRICTS[p.district], access = COMMON.accessRent[p.access], site = siteDataOf(p.id).f[type].rent;
+  if (type === 'ios') return g.market.iosRent * dist.ios * access * site * (p.rail ? COMMON.railRent : 1) * Math.max(0.62, Math.min(1, 1 - (usable - 4) * 0.0225));
+  if (type === 'spec') return g.market.indRent * dist.ind * access * site;
+  // shops, offices and apartments live on people, not truck access: district strength times what this site draws
+  return PRODUCTS[type].noiPsf * g.market.idx[type] * dist.rent[type] * site;
 }
 /** Full-market net income of an existing property at a given rent multiplier. */
 export function existingMarketNoi(g: Game, p: Parcel, mult = 1): number {
@@ -28,7 +30,7 @@ export function existingMarketNoi(g: Game, p: Parcel, mult = 1): number {
 export const existingLeased = (p: Parcel) => (p.existing!.type === 'mf' ? Math.min(1, (p.existing!.occ ?? 0) / MF_FULL) : p.existing!.leases.reduce((s, l) => s + l.share, 0));
 /** Asking price of an existing property: leased space at about the market cap rate, vacant space at a discount. */
 export function existingPrice(g: Game, p: Parcel): number {
-  const ex = p.existing!, cap = typeCap(g, ex.type) + DISTRICTS[p.district].cap, full = existingMarketNoi(g, p, ex.cond === 'tired' ? RENO.asis.tired : 1), ls = existingLeased(p);
+  const ex = p.existing!, cap = capFor(g, p.district, ex.type), full = existingMarketNoi(g, p, ex.cond === 'tired' ? RENO.asis.tired : 1), ls = existingLeased(p);
   // priced the way a buyer would price it at a sale: each lease at its own cap rate, empty space at a discount
   const leased = ex.type === 'mf' ? (full * ls) / cap : ex.leases.reduce((s, l) => s + l.rentAnnual / (cap + (l.credit === 'A' ? -0.0025 : l.credit === 'C' ? 0.0035 : 0) + (l.monthsLeft < 36 ? 0.003 : l.monthsLeft > 84 ? -0.001 : 0)), 0);
   return Math.round((leased + (((1 - ls) * full) / (cap + 0.0075)) * 0.9 - ex.deferred * 0.4) / 5000) * 5000;
@@ -43,13 +45,7 @@ export function usableAcres(p: Parcel, d?: Deal): number {
   return Math.max(0.5, p.acres * (1 - p.floodPct) - ease);
 }
 
-export function entitlementKind(p: Parcel, type: DealType): keyof typeof ENT {
-  if (p.existing) return 'none';
-  if (p.zoning === 'ETJ') return 'plat';
-  if (type === 'ios' || type === 'spec') return p.zoning === 'I' ? 'none' : p.zoning === 'C' ? (type === 'ios' ? 'sup' : 'rezone') : 'rezone';
-  if (type === 'mf') return p.zoning === 'C' ? 'sup' : 'rezone'; // apartments almost always need a hearing
-  return p.zoning === 'C' ? 'none' : p.zoning === 'I' ? 'sup' : 'rezone'; // retail and office belong on commercial land
-}
+export { entitlementKind } from './zoning';
 
 export function eligibleLenders(g: Game): Npc[] {
   return g.npcs.filter((n) => n.role === 'lender' && (!n.proOnly || g.difficulty === 'pro') && (n.id !== 'trinityregional' || n.rel >= 35 || g.trackRecord >= 1) && (n.id !== 'lifeco' || g.trackRecord >= 3));
@@ -58,10 +54,34 @@ const lenderLtc = (n: Npc) => (n.ltc ?? 0.6) + ((n.id === 'trinityregional' && n
 /** Rookie: each lender's fixed rate. Pro: floating, base rate plus the lender's spread. */
 export const lenderRate = (g: Game, n: Npc) => (g.difficulty === 'pro' ? g.market.baseRate + (n.spread ?? 0.035) : n.rate ?? 0.08);
 
-export function scoreDeal(spread: number, margin: number): Grade {
-  let s: Grade = spread >= 0.0175 ? 'A' : spread >= 0.0125 ? 'B' : spread >= 0.0075 ? 'C' : spread >= 0.0025 ? 'D' : 'F';
-  if (margin < 0.08 && (s === 'A' || s === 'B' || s === 'C')) s = 'D';
-  return s;
+/** The spread over the market cap rate a development needs to earn a C. Riskier types need more. */
+export const HURDLE: Record<DealType, number> = { ios: 0.0075, spec: 0.0075, mf: 0.0075, retail: 0.011, office: 0.016 };
+export function scoreDeal(type: DealType, spread: number, margin: number, slowLeaseUp = false): Grade {
+  const h = HURDLE[type], order: Grade[] = ['A', 'B', 'C', 'D', 'F'];
+  let i = spread >= h + 0.01 ? 0 : spread >= h + 0.005 ? 1 : spread >= h ? 2 : spread >= h - 0.005 ? 3 : 4;
+  if (margin < 0.08 && i < 3) i = 3;
+  if (slowLeaseUp && i < 4) i++; // a long, uncertain lease-up costs a grade
+  return order[i];
+}
+/** Lease-up is "slow" when this site will take well over the usual time for its type. */
+export const slowLeaseUp = (type: DealType, leaseUp: number) => leaseUp > leaseUpBase(type) * 1.45;
+
+/** Plain-English reasons behind a grade: the spread against this type's hurdle, then what the site adds or takes away. */
+export function explainGrade(g: Game, d: Deal, pf: Proforma): string[] {
+  const p = getParcel(g, d.parcelId), sd = siteDataOf(p.id), f = sd.f[d.type], out: string[] = [], bp = (x: number) => `${Math.round(x * 1e4)} bp`, pc = (x: number) => `${x >= 1 ? '+' : ''}${Math.round((x - 1) * 100)}%`;
+  const plural = { ios: 'storage yards', spec: 'warehouses', retail: 'shopping centers', mf: 'apartments', office: 'offices' }[d.type], one = { ios: 'Yard', spec: 'Warehouse', retail: 'Shopping-center', mf: 'Apartment', office: 'Office' }[d.type];
+  if (d.acq) out.push(`Purchases are graded on the return to equity: about ${Math.round((Number.isFinite(pf.lpIrr) ? pf.lpIrr : pf.gpIrr) * 100)}% a year over the planned hold. 6% earns a C, 11% a B, 16% an A.`);
+  else {
+    out.push(`It would earn ${(pf.yoc * 100).toFixed(1)}% on cost against a ${(pf.cap * 100).toFixed(1)}% market cap rate for ${plural} here: a ${bp(pf.spread)} spread.`);
+    out.push(`${one} deals need ${bp(HURDLE[d.type])} for a C and ${bp(HURDLE[d.type] + 0.01)} for an A${d.type === 'office' ? ', the widest margin of any type, because offices lease slowly and tenants are expensive to land' : d.type === 'retail' ? ', more than industrial, because many small tenants mean more leasing risk' : ''}.`);
+    if (pf.margin < 0.08) out.push(`Profit is only ${Math.round(pf.margin * 100)}% of cost. Under 8% leaves no room for surprises, so the grade is capped at D.`);
+    if (slowLeaseUp(d.type, pf.leaseUp)) out.push(`Expect about ${pf.leaseUp} months to fill it, against ${leaseUpBase(d.type)} for a typical site. The slow lease-up costs a grade.`);
+  }
+  if (d.type === 'retail') out.push(`${sd.traffic.toLocaleString('en-US')} cars a day, ${sd.rooftops.toLocaleString('en-US')} households within three miles and a $${Math.round(sd.income / 1000)}k median income put rent ${pc(f.rent)} against the district.`);
+  else if (d.type === 'office') out.push(`${sd.jobs.toLocaleString('en-US')} jobs within five miles and ${Math.round(sd.officeVac * 100)}% of nearby class-A space empty put rent ${pc(f.rent)} against the district.`);
+  else if (d.type === 'mf') out.push(`A $${sd.medRent.toLocaleString('en-US')} median rent, ${sd.jobGrowth}% job growth and schools rated ${sd.schools} of 10 put rent ${pc(f.rent)} against the district.`);
+  else out.push(`${p.access >= 4 ? 'Quick' : p.access >= 3 ? 'Fair' : 'Slow'} freeway access and a labor pool of ${sd.labor.toLocaleString('en-US')} put rent ${pc(COMMON.accessRent[p.access] * f.rent)} against the district.`);
+  return out;
 }
 
 /** The waterfall terms for this deal: the investor's terms, adjusted in Pro by what the player asked for. */
@@ -110,8 +130,6 @@ export function computeProforma(g: Game, d: Deal): Proforma {
   const ci = g.market.costIndex;
   const cleanup = d.known.env ? COMMON.cleanup[p.hidden.env] : 0;
   const soilsBad = d.known.soils && p.hidden.soils === 'expansive';
-  const dist = DISTRICTS[p.district];
-
   let hard = 0, soft = 0, devFee = 0, contingency = 0, leasing = 0, noi = 0, rentUnit = 0, buildingSf = 0, conMonths = 0, leaseUp = 0, cap = 0;
 
   let holdMonths: number = COMMON.holdMonths;
@@ -127,7 +145,7 @@ export function computeProforma(g: Game, d: Deal): Proforma {
     soft = d.price * 0.005 + hard * 0.08; devFee = d.price * 0.01 + hard * 0.04; contingency = hard * 0.08;
     const vacant = 1 - ls;
     leasing = vacant * (d.type === 'ios' ? full * 5 * IOS.lcPct : d.type === 'spec' ? buildingSf * SPEC.tiPsf + full * 5 * SPEC.lcPct : buildingSf * PRODUCTS[d.type].tiPsf + full * 5 * PRODUCTS[d.type].lcPct);
-    conMonths = plan.months; leaseUp = vacant > 0.05 ? Math.round(leaseUpOf(d.type) * Math.min(1, vacant + 0.3)) : 0; cap = typeCap(g, d.type) + dist.cap;
+    conMonths = plan.months; leaseUp = vacant > 0.05 ? Math.round(leaseUpFor(g, p, d.type) * Math.min(1, vacant + 0.3)) : 0; cap = capFor(g, p.district, d.type);
     holdMonths = ls >= 0.9 && existingLeased(p) >= 0.9 ? 36 : 24;
   } else if (d.type === 'ios') {
     const s = IOS.surface[d.ios.surface], sec = IOS.security[d.ios.security];
@@ -137,7 +155,7 @@ export function computeProforma(g: Game, d: Deal): Proforma {
     noi = rentUnit * usable * 12;
     soft = hard * IOS.softPct; devFee = hard * IOS.devFeePct; contingency = hard * IOS.contPct;
     leasing = noi * 5 * IOS.lcPct;
-    conMonths = s.months + (gc?.monthsDelta ?? 0); leaseUp = IOS.leaseUpMonths; cap = g.market.iosCap + dist.cap;
+    conMonths = s.months + (gc?.monthsDelta ?? 0); leaseUp = leaseUpFor(g, p, 'ios'); cap = capFor(g, p.district, 'ios');
   } else if (d.type === 'spec') {
     buildingSf = Math.round((usableSf * d.spec.coverage) / 1000) * 1000;
     const psf = SPEC.shell[d.spec.clear] + (d.spec.extras ? SPEC.extrasCost : 0);
@@ -147,18 +165,18 @@ export function computeProforma(g: Game, d: Deal): Proforma {
     noi = rentUnit * buildingSf;
     soft = hard * SPEC.softPct + buildingSf * SPEC.impactPsf; devFee = hard * SPEC.devFeePct; contingency = hard * SPEC.contPct;
     leasing = buildingSf * SPEC.tiPsf + noi * 5 * SPEC.lcPct;
-    conMonths = SPEC.months + (gc?.monthsDelta ?? 0); leaseUp = SPEC.leaseUpMonths; cap = g.market.indCap + dist.cap;
+    conMonths = SPEC.months + (gc?.monthsDelta ?? 0); leaseUp = leaseUpFor(g, p, 'spec'); cap = capFor(g, p.district, 'spec');
   } else {
     // shopping centers, apartments and offices share one model; d.spec.extras means a premium finish
     const pr = PRODUCTS[d.type as ProductKey];
     buildingSf = Math.round((usableSf * pr.far) / 1000) * 1000;
-    hard = buildingSf * (pr.cost + (d.spec.extras ? pr.premiumCost : 0)) * ci * gcFactor + cleanup + d.ent.conditionsCost
+    hard = buildingSf * (pr.cost * districtCost(d.type, DISTRICTS[p.district]) + (d.spec.extras ? pr.premiumCost : 0)) * ci * gcFactor + cleanup + d.ent.conditionsCost
       + (soilsBad ? buildingSf * SPEC.soilsPsf : 0) + (!p.sewer ? SPEC.sewerExt : 0) + (!p.water ? SPEC.waterExt : 0);
     rentUnit = rentBasis(g, p, d.type, usable) * (d.spec.extras ? pr.premiumRent : 1);
     noi = rentUnit * buildingSf;
     soft = hard * pr.softPct + buildingSf * SPEC.impactPsf; devFee = hard * SPEC.devFeePct; contingency = hard * SPEC.contPct;
     leasing = buildingSf * pr.tiPsf + noi * 5 * pr.lcPct;
-    conMonths = pr.months + (gc?.monthsDelta ?? 0); leaseUp = pr.leaseUp; cap = typeCap(g, d.type) + dist.cap;
+    conMonths = pr.months + (gc?.monthsDelta ?? 0); leaseUp = leaseUpFor(g, p, d.type); cap = capFor(g, p.district, d.type);
   }
 
   const land = d.price, closing = land * (d.acq ? 0.005 : COMMON.closingPct), pursuit = d.pursuit;
@@ -193,7 +211,7 @@ export function computeProforma(g: Game, d: Deal): Proforma {
   const ret = projectReturns(makeAcct(g, d, lpEquity, gpEquity), months, netSale - loan + hold);
   // developments are graded on the spread; purchases on the projected return to equity
   const eq = Number.isFinite(ret.lpIrr) ? ret.lpIrr : ret.gpIrr;
-  const score: Grade = d.acq ? (eq >= 0.16 ? 'A' : eq >= 0.11 ? 'B' : eq >= 0.06 ? 'C' : eq >= 0.02 ? 'D' : 'F') : scoreDeal(spread, margin);
+  const score: Grade = d.acq ? (eq >= 0.16 ? 'A' : eq >= 0.11 ? 'B' : eq >= 0.06 ? 'C' : eq >= 0.02 ? 'D' : 'F') : scoreDeal(d.type, spread, margin, slowLeaseUp(d.type, leaseUp));
 
   return {
     usableAcres: usable, buildingSf, budget, rentUnit, noi, yoc, cap, spread, value, profit, margin, conMonths,

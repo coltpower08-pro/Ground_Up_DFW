@@ -1,9 +1,10 @@
 // Right-hand context drawer: a parcel dossier or the Deal Room for the selected deal.
 import { useState } from 'react';
 import { ACHIEVEMENTS } from '../content/achievements';
-import { DISTRICTS, roadOf } from '../content/world';
+import { DISTRICTS, roadOf, siteDataOf } from '../content/world';
+import { capFor, districtRent, leaseUpBase, leaseUpFor, vacancyFor } from '../engine/market';
 import { ACRE_RANGE, ATTORNEY_FEE, ENT, IOS, MF_UNIT_SF, OUTREACH_COST, PERM, PRODUCTS, RENO, REPORTS, SPEC, TERMS, TYPE_SHORT } from '../engine/params';
-import { askPrice, computeProforma, dealTerms, entitlementKind, existingLeased, existingMarketNoi, getNpc, getParcel, sensitivity, usableAcres } from '../engine/proforma';
+import { askPrice, computeProforma, dealTerms, entitlementKind, explainGrade, existingLeased, existingMarketNoi, getNpc, getParcel, sensitivity, usableAcres } from '../engine/proforma';
 import * as S from '../engine/sim';
 import type { Deal, DealType, Game, Parcel, Proforma, ReportId } from '../engine/types';
 import { bps, dateStr, daysToWords, money, mult, pct } from './format';
@@ -44,6 +45,56 @@ function RoadFacts({ p }: { p: Parcel }) {
   );
 }
 
+/** The numbers that drive one property type at this site, and what they do to its rent and lease-up. */
+function SiteFacts({ g, p, type }: { g: Game; p: Parcel; type: DealType }) {
+  const sd = siteDataOf(p.id), f = sd.f[type], n = (x: number) => x.toLocaleString('en-US');
+  const vs = (x: number) => (Math.abs(x - 1) < 0.005 ? 'in line with' : `${Math.round(Math.abs(x - 1) * 100)}% ${x > 1 ? 'above' : 'below'}`);
+  const lu = leaseUpFor(g, p, type), base = leaseUpBase(type);
+  const unit = type === 'ios' ? '/acre/mo' : type === 'mf' ? '/SF/yr net' : '/SF/yr';
+  const dr = districtRent(g, p.district, type);
+  return (
+    <div className="mt-2 rounded-xl border border-line bg-white/55 p-3 text-[13px]">
+      <div className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-ink2">What drives {{ ios: 'yard', spec: 'warehouse', retail: 'shopping-center', mf: 'apartment', office: 'office' }[type]} rents here</div>
+      {type === 'retail' && <>
+        <Row label={<Term k="traffic">Traffic count</Term>} value={`${n(sd.traffic)} cars a day`} />
+        <Row label={<Term k="rooftops">Rooftops, 3 miles</Term>} value={`${n(sd.rooftops)} households`} />
+        <Row label="Median household income" value={money(sd.income)} />
+        <Row label={<Term k="anchor">Anchors nearby</Term>} value={sd.anchors === 0 ? 'None' : sd.anchors === 1 ? 'One grocer' : `${sd.anchors} anchors`} />
+      </>}
+      {type === 'office' && <>
+        <Row label={<Term k="officejobs">Office jobs, 5 miles</Term>} value={n(sd.jobs)} />
+        <Row label="Restaurants and services" value={'●'.repeat(sd.amenities) + '○'.repeat(5 - sd.amenities)} />
+        <Row label={<><Term k="classa">Class A</Term> space empty nearby</>} value={pct(sd.officeVac, 0)} />
+      </>}
+      {type === 'mf' && <>
+        <Row label={<Term k="renters">Renter households, 3 miles</Term>} value={n(sd.renters)} />
+        <Row label="Median apartment rent" value={`$${n(sd.medRent)}/mo`} />
+        <Row label="Job growth" value={`${sd.jobGrowth.toFixed(1)}% a year`} />
+        <Row label={<Term k="schools">School rating</Term>} value={`${sd.schools} of 10`} />
+      </>}
+      {(type === 'ios' || type === 'spec') && <>
+        <Row label={<Term k="laborpool">Labor pool</Term>} value={`${n(sd.labor)} workers`} />
+        <Row label={<Term k="interchange">Drive to the freeway</Term>} value={`${roadOf(p.id)?.rampMi.toFixed(1) ?? '?'} mi`} />
+      </>}
+      <Row label="District rent" value={`${type === 'ios' ? money(dr) : `$${dr.toFixed(2)}`}${unit}`} />
+      <Row label="This site against the district" value={`Rent ${vs((type === 'ios' || type === 'spec' ? [0.9, 0.9, 0.95, 1, 1.03, 1.06][p.access] : 1) * f.rent)}`} />
+      <Row label={<><Term k="vacancy">Vacancy</Term> in this district</>} value={pct(vacancyFor(g, p.district, type), 1)} />
+      <Row label={<><Term k="absorption">Lease-up</Term> expected</>} value={`${lu} months (typical ${base})`} />
+      <Row label={<Term k="caprate">Cap rate here</Term>} value={pct(capFor(g, p.district, type), 2)} />
+    </div>
+  );
+}
+
+function Why({ lines }: { lines: string[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-2 border-t border-line pt-2 text-[12.5px]">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="font-semibold text-accent">{open ? 'Hide' : 'Why this grade?'}</button>
+      {open && <ul className="mt-1 list-disc space-y-1 pl-4 text-ink2">{lines.map((l, i) => <li key={i}>{l}</li>)}</ul>}
+    </div>
+  );
+}
+
 const PRODUCT_SUB: Record<DealType, string> = { ios: 'Fast, simple, no building', spec: 'Bigger, slower, more capital', retail: 'Many small tenants, high rent', mf: 'Fills unit by unit, low cap rate', office: 'Slow to lease, costly build-outs' };
 const TYPE_ARTICLE: Record<DealType, string> = { ios: 'an IOS yard', spec: 'a spec building', retail: 'a shopping center', mf: 'apartments', office: 'an office building' };
 
@@ -55,8 +106,20 @@ function parcelTake(p: Parcel, type: DealType): { who: 'analyst' | 'broker' | 'a
     if (p.existing.cond === 'tired') return { who: 'cm', line: 'Order the property condition report. An older building always has a repair bill; the only question is whether you learn the number before or after you own it.' };
     return { who: 'broker', line: 'You are paying a discount for the empty space. Fill it and the value jumps. That is the whole value-add game.' };
   }
-  if (type === 'mf' && p.zoning !== 'C') return { who: 'attorney', line: 'Apartments are the hardest rezoning there is. Neighbors show up. Budget for outreach and a real chance of a no.' };
-  if (type === 'office') return { who: 'analyst', line: 'Office leases slowly and tenants want big build-out allowances. Underwrite a year of vacancy before you fall in love.' };
+  // each type is judged on different things, so the advice starts with what matters for this one
+  const sd = siteDataOf(p.id), road = roadOf(p.id), best = p.fit?.[0];
+  if (best && !p.fit!.includes(type) && (best === 'retail' || best === 'mf' || best === 'office') !== (type === 'retail' || type === 'mf' || type === 'office'))
+    return { who: 'broker', line: `The seller is pricing this as ${{ ios: 'a yard site', spec: 'a warehouse site', retail: 'a shopping-center site', mf: 'an apartment site', office: 'an office site' }[best]}, because that is what the location is worth most for. ${TYPE_SHORT[type]} will struggle to carry this land price.` };
+  if (type === 'retail') {
+    if (road?.hard) return { who: 'broker', line: `A hard corner with ${sd.traffic.toLocaleString('en-US')} cars a day. Retailers pay up for this, and so will you. Check that the rooftops and incomes back up the traffic.` };
+    if (sd.traffic < 15000) return { who: 'analyst', line: `Only ${sd.traffic.toLocaleString('en-US')} cars a day pass this site. Shops live on traffic. Expect lower rents and a slow lease-up.` };
+    if (sd.rooftops < 9000) return { who: 'analyst', line: `There are only ${sd.rooftops.toLocaleString('en-US')} households within three miles. The traffic is passing through, not shopping. Grocers will wait for more rooftops.` };
+    return { who: 'broker', line: `${sd.traffic.toLocaleString('en-US')} cars a day and ${sd.rooftops.toLocaleString('en-US')} households nearby. Solid retail fundamentals. The question is what the land costs you.` };
+  }
+  if (type === 'mf' && p.zoning !== 'C') return { who: 'attorney', line: `Apartments are the hardest rezoning there is, and schools rated ${sd.schools} of 10 mean ${sd.schools >= 7 ? 'organized neighbors who will show up' : 'a council more open to new housing'}. Budget for outreach and a real chance of a no.` };
+  if (type === 'mf') return { who: 'analyst', line: `Apartments here rent for about $${sd.medRent.toLocaleString('en-US')} a month and jobs are growing ${sd.jobGrowth.toFixed(1)}% a year. ${sd.jobGrowth >= 2.4 ? 'That is strong demand. Units should fill quickly.' : 'That is steady, not hot. Do not count on rent growth to save a thin deal.'}` };
+  if (type === 'office') return { who: 'analyst', line: sd.officeVac >= 0.24 ? `About ${Math.round(sd.officeVac * 100)}% of the best office space nearby is empty. You would be competing with landlords giving away free rent. Underwrite a long lease-up.` : `${sd.jobs.toLocaleString('en-US')} office jobs within five miles and ${Math.round(sd.officeVac * 100)}% vacancy. This is one of the few places a new office can work. It still leases slowly, so keep cash in reserve.` };
+  if ((type === 'ios' || type === 'spec') && road && road.rampMi > 2.5 && !p.offMarket) return { who: 'broker', line: `It is ${road.rampMi.toFixed(1)} miles to the freeway. Truck tenants measure that first. Expect to give on rent or wait longer for a tenant.` };
   if (p.floodPct >= 0.2) return { who: 'analyst', line: 'Price it on usable acres. A third of this tract is floodplain that will never earn rent.' };
   if (p.id === 'westport8') return { who: 'attorney', line: 'A former truck wash. Do not let the deposit go hard without a Phase I.' };
   if (p.zoning === 'AG') return { who: 'attorney', line: 'Agricultural zoning means a rezoning case. Budget four months and real odds of a no.' };
@@ -137,6 +200,7 @@ function ParcelPanel({ g, p }: { g: Game; p: Parcel }) {
           <Row label="Flood plain" value={p.floodPct ? pct(p.floodPct, 0) : 'None'} />
         </div>}
         <RoadFacts p={p} />
+        <SiteFacts g={g} p={p} type={type} />
 
         <Section title={ex ? 'If you buy it as it stands' : 'What would you build?'}>
           {!ex && (
@@ -167,6 +231,7 @@ function ParcelPanel({ g, p }: { g: Game; p: Parcel }) {
               <Row label="Loan" value={money(pf.budget.loan)} />
             </div>
             <div className="text-[13px]"><Row label={<Term k="entitlement">Approval needed</Term>} value={ex ? 'None. It is already built.' : ent.label} /></div>
+            <Why lines={S.previewWhy(g, p.id, type, price)} />
           </div>
         </Section>
 
@@ -547,6 +612,7 @@ function Predev({ g, d, p, walk }: { g: Game; d: Deal; p: Parcel; walk: React.Re
           <Row label="Projected profit" value={`${money(pf.profit)} (${pct(pf.margin, 0)})`} />
           {lp && <Row label={<Term k="irr">Projected investor IRR</Term>} value={`${pct(pf.lpIrr, 0)} · ${mult(pf.lpMultiple)}`} />}
           <Row label={need >= 0 ? 'Cash you must bring to closing' : 'Pursuit costs repaid to you at closing'} value={money(Math.abs(need))} strong />
+          <Why lines={explainGrade(g, d, pf)} />
         </div>
       </Section>
       {pro && lp && (

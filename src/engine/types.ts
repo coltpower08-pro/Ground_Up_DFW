@@ -230,6 +230,10 @@ export interface Market {
   landIndex: number;
   costIndex: number;
   baseRate: number; // floating-rate index, a SOFR stand-in
+  /** Rent index (1 at the start) and cap rate for the non-industrial types, and vacancy for every type. */
+  idx: { retail: number; office: number; mf: number };
+  caps: { retail: number; office: number; mf: number };
+  vac: Record<DealType, number>;
 }
 
 export interface Game {
@@ -244,7 +248,7 @@ export interface Game {
   rep: Record<RepKey, number>;
   trackRecord: number;
   market: Market;
-  marketHistory: { m: number; iosRent: number; indRent: number }[];
+  marketHistory: { m: number; iosRent: number; indRent: number; retail?: number; office?: number; mf?: number }[];
   parcels: Parcel[];
   npcs: Npc[];
   deals: Deal[];

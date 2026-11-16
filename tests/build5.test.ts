@@ -86,6 +86,8 @@ describe('buying existing properties', () => {
       const g = rich(reno === 'asis' ? 21 : 22);
       for (const p of g.parcels.filter((x) => x.existing)) {
         expect(askPrice(g, p)).toBeGreaterThan(100000);
+        // this checks the mechanics of every purchase, so one bad sale should not sour the next investor
+        for (const n of g.npcs) n.rel = 95; g.rep.investors = 90;
         if (p.status === 'available') play(g, p.id, p.existing!.type, reno);
       }
     }

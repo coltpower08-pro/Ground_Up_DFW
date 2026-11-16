@@ -49,7 +49,6 @@ export function suitability(k: Ctx): Record<Use, number> {
 }
 
 const LAND_BASE: Record<string, number> = { alliance: 6, dfw: 15, gsw: 12.5, netarrant: 9.5, southdallas: 3.6, eastdallas: 4.8, southtarrant: 4.6, westfw: 3.6, denton: 3.6, collin: 11, cbd: 26, fwcbd: 12 };
-const USE_LAND: Record<Use, number> = { ios: 1.05, spec: 1, retail: 1.5, office: 1.45, mf: 1.15 };
 const QUOTA: Record<Use, number> = { retail: 22, office: 16, mf: 22, spec: 10, ios: 8 };
 const ACRES: Record<Use, [number, number]> = { ios: [2.5, 9], spec: [6, 38], retail: [3, 12], office: [2.5, 9], mf: [6, 20] };
 const SUFFIX: Record<Use, string[]> = {
@@ -106,7 +105,7 @@ export function generateSites(districtOf: (x: number, y: number) => string, exis
       const rural = k.u < 0.15;
       const zoning: Parcel['zoning'] = use === 'ios' || use === 'spec' ? (r(2) < 0.55 ? 'I' : rural && r(3) < 0.4 ? 'ETJ' : r(3) < 0.5 ? 'AG' : 'C') : use === 'mf' ? (r(2) < 0.45 ? 'C' : rural && r(3) < 0.3 ? 'ETJ' : 'AG') : r(2) < 0.7 ? 'C' : r(3) < 0.5 ? 'AG' : 'I';
       const floodPct = k.flood ? Math.round((0.06 + r(4) * 0.22) * 100) / 100 : 0;
-      const askPsf = Math.round(LAND_BASE[c.d] * USE_LAND[use] * (0.85 + k.u * 0.45) * (acres > 15 ? 0.8 : 1) * (zoning === 'AG' ? 0.72 : zoning === 'ETJ' ? 0.62 : 1) * (1 - floodPct * 0.5) * (0.9 + r(5) * 0.2) * (k.majorCorner && use === 'retail' ? 1.15 : 1) * 20) / 20;
+      const askPsf = Math.round(LAND_BASE[c.d] * (0.85 + k.u * 0.45) * (acres > 15 ? 0.8 : 1) * (zoning === 'AG' ? 0.8 : zoning === 'ETJ' ? 0.75 : 1) * (use === 'ios' ? 1.3 : 1) * (1 - floodPct * 0.5) * (0.9 + r(5) * 0.2) * 20) / 20; // industrial value; content/world raises it where another use is worth more
       const served = k.u > 0.12 || k.ind > 0.1 || zoning !== 'ETJ';
       const offMarket = r(6) < 0.1;
       const place = k.cityDist < 5 ? k.city : k.fw.name, tail = SUFFIX[use][Math.floor(r(7) * SUFFIX[use].length)];

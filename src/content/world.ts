@@ -2,29 +2,42 @@
 // Geography (highways, towns, rail) is real. Parcels, firms and people are invented,
 // and every price and rent is a game-balance number, not market data.
 import type { Existing, Npc, Parcel } from '../engine/types';
-import { ll, placeRect, type XY } from '../render/layout';
+import { hash, ll, placeRect, type XY } from '../render/layout';
+const hash2 = (x: number, y: number) => hash(x, y, 950);
 import { buildRoadNet, setRoadNet, type SiteRoad } from './roads';
 import { context, generateSites, suitability } from './sitegen';
 import { ACRE_RANGE } from '../engine/params';
+import { computeSiteData, districtCapAdj, residualLandPsf, residualSpecPsf, residualYardPsf, type DistrictProfile, type SiteData } from './sitedata';
+import type { DealType } from '../engine/types';
 
 /** How strong each district is for retail, apartments and offices (rooftops and incomes, not truck access). */
 const URBAN: Record<string, number> = { alliance: 0.95, dfw: 1.15, gsw: 1.0, netarrant: 1.08, southdallas: 0.8, eastdallas: 0.9, southtarrant: 0.92, westfw: 0.92, denton: 0.95, collin: 1.2, cbd: 1.3, fwcbd: 1.08 };
-export interface District { id: string; name: string; blurb: string; urban: number; ind: number; ios: number; cap: number; ent: number; demand: number; at: [number, number] }
+export interface District extends DistrictProfile { id: string; name: string; blurb: string; urban: number; ind: number; ios: number; cap: number; ent: number; at: [number, number] }
+// [wealth, job growth %, rent: retail office apartments, demand: retail office apartments, usual vacancy: retail office apartments]
+const PEOPLE: Record<string, number[]> = {
+  alliance: [0.55, 2.2, 1.0, 0.9, 1.0, 1.05, 0.8, 1.1, 0.06, 0.2, 0.08], dfw: [0.6, 1.5, 1.1, 1.15, 1.08, 1.0, 1.05, 1.0, 0.05, 0.2, 0.07], gsw: [0.3, 0.8, 0.95, 0.8, 0.92, 0.95, 0.75, 0.95, 0.07, 0.25, 0.08],
+  netarrant: [0.7, 1.0, 1.08, 0.98, 1.02, 1.0, 0.85, 1.0, 0.05, 0.22, 0.07], southdallas: [0.1, 1.3, 0.8, 0.65, 0.8, 0.8, 0.55, 0.85, 0.09, 0.3, 0.1], eastdallas: [0.25, 1.6, 0.9, 0.7, 0.88, 0.95, 0.6, 0.95, 0.07, 0.28, 0.09],
+  southtarrant: [0.35, 1.5, 0.92, 0.72, 0.9, 1.0, 0.65, 1.0, 0.07, 0.27, 0.08], westfw: [0.4, 1.4, 0.9, 0.75, 0.9, 0.9, 0.7, 0.9, 0.08, 0.26, 0.09], denton: [0.45, 2.0, 0.95, 0.78, 0.95, 1.0, 0.7, 1.05, 0.06, 0.24, 0.08],
+  collin: [0.9, 2.4, 1.25, 1.2, 1.2, 1.15, 1.15, 1.15, 0.045, 0.19, 0.07], cbd: [0.8, 1.2, 1.3, 1.35, 1.35, 1.05, 1.1, 1.15, 0.06, 0.24, 0.085], fwcbd: [0.4, 1.1, 1.05, 1.0, 1.08, 0.95, 0.9, 1.0, 0.07, 0.17, 0.08],
+};
+const profile = (id: string, ind: number, ios: number, demand: number): DistrictProfile => { const v = PEOPLE[id]; return { wealth: v[0], growth: v[1], rent: { ios, spec: ind, retail: v[2], office: v[3], mf: v[4] }, demand: { ios: demand, spec: demand, retail: v[5], office: v[6], mf: v[7] }, vac: { ios: 0.04 / Math.max(0.6, demand), spec: 0.075 / Math.max(0.6, demand), retail: v[8], office: v[9], mf: v[10] } }; };
 /** Each district scales the metro-wide market: rent multipliers, a cap-rate adjustment, approval odds and tenant demand. */
 export const DISTRICTS: Record<string, District> = Object.fromEntries(([
   ['alliance', 'North Fort Worth / Alliance', 'Big-box and yard demand around the intermodal and the airport. Fast-growing, with ETJ land at the edges.', 1.0, 1.0, 0, 0, 1.0, 32.99, -97.3],
   ['dfw', 'DFW Airport / Coppell / Grapevine', 'The best address in the metro. Top rents, almost no land, and cities that do not want outdoor storage.', 1.2, 1.3, -0.0025, -0.12, 1.2, 32.94, -97.02],
   ['gsw', 'Great Southwest / Arlington', 'Old-line infill industrial between the two downtowns. Tight land, strong tenants, tired buildings.', 1.08, 1.15, -0.001, -0.05, 1.15, 32.75, -97.05],
   ['netarrant', 'Northeast Tarrant / HEB', 'Small-bay and yard infill for contractors and owner-users. Small sites, careful councils.', 1.1, 1.2, -0.0005, -0.1, 1.05, 32.83, -97.19],
-  ['southdallas', 'South Dallas / Inland Port', 'Cheap land in big blocks along I-20 and I-45 by the Union Pacific intermodal. More supply, lower rents.', 0.9, 0.92, 0.0015, -0.03, 0.95, 32.61, -96.73],
+  ['southdallas', 'South Dallas / Inland Port', 'Cheap land in big blocks along I-20 and I-45 by the Union Pacific intermodal. More supply, lower rents.', 0.94, 0.92, 0.0015, -0.03, 0.95, 32.61, -96.73],
   ['eastdallas', 'East Dallas County / Mesquite / Forney', 'The growth frontier out US-80 and I-20. Big tracts, improving demand.', 0.93, 0.95, 0.001, 0, 0.95, 32.76, -96.56],
   ['southtarrant', 'South Tarrant / I-35W South', 'Rail-served pockets and farmland from Everman to Burleson. Steady, never hot.', 0.95, 0.95, 0.001, 0.02, 0.9, 32.6, -97.3],
-  ['westfw', 'West Fort Worth / Benbrook / Aledo', 'Emerging corridor west on I-20 and I-30. The cheapest dirt in the metro and the longest lease-ups.', 0.88, 0.9, 0.0025, 0.05, 0.75, 32.72, -97.48],
+  ['westfw', 'West Fort Worth / Benbrook / Aledo', 'Emerging corridor west on I-20 and I-30. The cheapest dirt in the metro and the longest lease-ups.', 0.91, 0.9, 0.0025, 0.05, 0.75, 32.72, -97.48],
   ['denton', 'Denton / I-35 North', 'Edge greenfield where the two I-35s meet. Rail plays and patient capital.', 0.92, 0.9, 0.0015, 0.03, 0.85, 33.2, -97.17],
   ['cbd', 'Central and North Dallas', 'Downtown, Uptown, the Park Cities and the Tollway corridor up to Addison. The deepest office and apartment market in the metro, and the most expensive dirt.', 1.15, 1.25, -0.002, -0.15, 1.05, 32.8, -96.8],
   ['fwcbd', 'Central Fort Worth', 'Downtown Fort Worth and the near west side. Smaller and steadier than Dallas, with a city that wants its core filled in.', 1.02, 1.08, 0, -0.06, 0.95, 32.752, -97.335],
   ['collin', 'Collin County / Plano / Frisco / McKinney', 'Wealthy suburbs with flex and light industrial. High rents, expensive land, and little patience for trucks.', 1.05, 1.1, -0.001, -0.15, 0.9, 33.1, -96.72],
-] as [string, string, string, number, number, number, number, number, number, number][]).map(([id, name, blurb, ind, ios, cap, ent, demand, la, lo]) => [id, { id, name, blurb, urban: URBAN[id], ind, ios, cap, ent, demand, at: [la, lo] }]));
+] as [string, string, string, number, number, number, number, number, number, number][]).map(([id, name, blurb, ind, ios, cap, ent, demand, la, lo]) => [id, { id, name, blurb, urban: URBAN[id], ind, ios, cap, ent, at: [la, lo], ...profile(id, ind, ios, demand) }]));
+/** Cap-rate adjustment for a property type in a district. */
+export const capAdj = (districtId: string, type: DealType) => districtCapAdj(type, DISTRICTS[districtId].cap, DISTRICTS[districtId]);
 
 type Z = Parcel['zoning'];
 type Raw = [id: string, name: string, area: string, district: string, lat: number, lon: number, acres: number, askPsf: number, zoning: Z, floodPct: number, water: 0 | 1, sewer: 0 | 1, access: number, rail: 0 | 1, offMarket: 0 | 1, env: 'none' | 'minor' | 'major', soils: 'good' | 'expansive', easement: number, blurb: string];
@@ -130,6 +143,7 @@ export function districtAt(x: number, y: number): string {
   for (const [id, [cx, cy]] of DCENTERS) { const d = Math.hypot(cx - x - 0.5, cy - y - 0.5) * (id === 'fwcbd' ? 2.2 : 1); if (d < bd) { bd = d; best = id; } }
   return best;
 }
+const TUTORIAL = ['bluemound', 'northlake10']; // the two guided deals keep their hand-set prices and access
 const GEN = generateSites(districtAt, [...PARCELS, ...EX_PARCELS]);
 const ALL: Omit<Parcel, 'status'>[] = [...PARCELS, ...EX_PARCELS, ...GEN.land, ...GEN.buildings];
 const NET = buildRoadNet(ALL.map((p) => ({ id: p.id, tile: p.tile })));
@@ -138,9 +152,31 @@ for (const p of ALL) {
   const r = NET.site[p.id];
   if (p.blurb.includes('{front}')) p.blurb = p.blurb.replace('{front}', r.hard ? 'A hard corner where two arterials meet' : r.front === 'interstate' || r.front === 'highway' ? `Freeway-visible frontage on ${r.frontName.replace(' frontage', '')}` : r.corner ? 'A corner site on a busy street' : 'A mid-block retail site');
   // the old hand-set access dots now come from the drive to the nearest interchange
-  p.access = r.rampMi <= 0.65 ? 5 : r.rampMi <= 1.1 ? 4 : r.rampMi <= 2 ? 3 : r.rampMi <= 3.5 ? 2 : 1;
+  if (!TUTORIAL.includes(p.id)) p.access = r.rampMi <= 0.65 ? 5 : r.rampMi <= 1.1 ? 4 : r.rampMi <= 2 ? 3 : r.rampMi <= 3.5 ? 2 : 1;
   if (!p.fit) { const s = suitability(context(p.tile.x, p.tile.y)), ua = p.acres * (1 - p.floodPct); p.fit = (Object.keys(s) as (keyof typeof s)[]).filter((t) => s[t] >= 0.55 && ua >= ACRE_RANGE[t][0] && ua <= ACRE_RANGE[t][1]).sort((a, b) => s[b] - s[a]); if (!p.fit.length) p.fit = [p.acres >= 6 ? 'spec' : 'ios']; }
 }
+// what drives each property type at each site, then land priced at its highest and best use
+const SITE: Record<string, SiteData> = {};
+for (const p of ALL) {
+  const k = context(p.tile.x, p.tile.y), d = DISTRICTS[p.district], s = TUTORIAL.includes(p.id) ? { ios: 0.8, spec: 0.565, retail: 0, office: 0, mf: 0 } : suitability(k), sd = (SITE[p.id] = computeSiteData(p, NET.site[p.id], k, d, s));
+  if (p.existing || TUTORIAL.includes(p.id)) continue;
+  // industrial value is the floor; if shops, offices or apartments are worth more here, the seller prices to that
+  // each use is worth a different amount here; the seller prices to the best of them, and never gives land away
+  const ua = p.acres * (1 - p.floodPct), fits = (t: DealType) => ua >= ACRE_RANGE[t][0] && ua <= ACRE_RANGE[t][1];
+  const worth: Record<DealType, number> = { ios: residualYardPsf(p, sd, d, d.cap), spec: fits('spec') ? residualSpecPsf(p, sd, d.ind, d.cap) : 0, retail: 0, office: 0, mf: 0 };
+  // the use the site was laid out for always counts; another use has to be a strong match to move the price
+  const meant = p.id.startsWith('g-') ? (p.id.split('-')[1] as DealType) : null, counts = (t: DealType) => (t === meant ? true : s[t] >= (t === 'ios' || t === 'spec' ? (meant && meant !== 'ios' && meant !== 'spec' ? 0.7 : 0.3) : 0.62));
+  for (const t of ['retail', 'office', 'mf'] as const) if (counts(t) && fits(t)) worth[t] = residualLandPsf(p, t, sd, d, d.cap);
+  for (const t of ['ios', 'spec'] as const) if (!counts(t)) worth[t] = 0;
+  if (ua > 12 && meant !== 'ios' && worth.spec > 0) worth.ios = Math.min(worth.ios, worth.spec * 0.7); // big tracts sell to building developers, not yard operators
+  const best = Math.max(p.askPsf * 0.45, ...Object.values(worth));
+  p.askPsf = Math.min(140, Math.max(0.6, Math.round(best * (0.92 + hash2(p.tile.x, p.tile.y) * 0.2) * 20) / 20));
+  // "suits" means the location works for the use and the use can pay something close to the price
+  const keep = (Object.keys(worth) as DealType[]).filter((t) => worth[t] > 0 && worth[t] >= p.askPsf * 0.7).sort((a, b) => worth[b] - worth[a]);
+  p.fit = keep.length ? keep : [meant ?? (Object.keys(worth) as DealType[]).sort((a, b) => worth[b] - worth[a])[0]];
+}
+/** The numbers that drive each property type at a site. */
+export const siteDataOf = (id: string): SiteData => SITE[id];
 /** Frontage, corner and distance to a freeway for a site. */
 export const roadOf = (id: string): SiteRoad => NET.site[id];
 

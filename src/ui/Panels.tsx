@@ -7,8 +7,9 @@ import { DISTRICTS } from '../content/world';
 import { ll } from '../render/layout';
 import * as S from '../engine/sim';
 import { CYCLE, STAFF } from '../engine/params';
-import { lenderRate } from '../engine/proforma';
-import { LOC_LIMIT, OVERHEAD, type Game, type Npc, type StaffKey } from '../engine/types';
+import { BASE_VAC, buildCost, capFor, districtRent, leaseUpBase, metroRent, typeCap, vacancyFor } from '../engine/market';
+import { HURDLE, lenderRate } from '../engine/proforma';
+import { LOC_LIMIT, OVERHEAD, type DealType, type Game, type Npc, type StaffKey } from '../engine/types';
 import { dateStr, money, mult, pct } from './format';
 import { Bar, Btn, Chip, PHASE_LABEL, Row, Section, Term } from './kit';
 import { useGame, useUI, type PanelId } from './store';
@@ -179,14 +180,37 @@ function Spark({ values }: { values: number[] }) {
   );
 }
 
+const MKT_TABS: { value: DealType; label: string }[] = [{ value: 'ios', label: 'Yards' }, { value: 'spec', label: 'Industrial' }, { value: 'retail', label: 'Retail' }, { value: 'mf', label: 'Apartments' }, { value: 'office', label: 'Office' }];
+const MKT_NOTE: Record<DealType, string> = {
+  ios: 'Storage yards are the simplest product. Rent follows truck access and zoning, and almost nothing sits empty for long.',
+  spec: 'Warehouses follow freeways, rail and labor. The steadiest of the building types, with thin margins on expensive land.',
+  retail: 'Shops follow rooftops, incomes and traffic counts. Corners matter. Many small tenants mean more leasing risk.',
+  mf: 'Apartments follow jobs, schools and renters. They sell at the lowest cap rates, and swing hardest with the cycle on the way up.',
+  office: 'Office is the weakest market in the metro. Vacancy is high, lease-ups are long, and only the best locations work.',
+};
 function Market({ g }: { g: Game }) {
   const m = g.market, focusOn = useUI((st) => st.focusOn);
+  const [t, setT] = useState<DealType>('ios');
+  const rentStr = (v: number) => (t === 'ios' ? money(v) : `$${v.toFixed(2)}`);
+  const unit = t === 'ios' ? 'per acre, monthly' : t === 'mf' ? 'net income per SF, yearly' : t === 'spec' ? 'per SF, yearly NNN' : 'net per SF, yearly';
+  const hist = g.marketHistory.map((x) => (t === 'ios' ? x.iosRent : t === 'spec' ? x.indRent : x[t] ?? 1));
+  const vac = m.vac[t], tight = vac < BASE_VAC[t] * 0.85 ? 'Tight' : vac > BASE_VAC[t] * 1.2 ? 'Soft' : 'Normal';
   return (
     <>
-      <div className="eyebrow">Dallas-Fort Worth, metro average</div>
+      <div className="eyebrow">Dallas-Fort Worth, by property type</div>
+      <div className="mt-2 grid grid-cols-5 gap-1" role="tablist" aria-label="Property type">
+        {MKT_TABS.map((o) => (<button key={o.value} type="button" role="tab" aria-selected={t === o.value} onClick={() => setT(o.value)} className={`rounded-lg border px-1 py-1.5 text-[12px] font-medium ${t === o.value ? 'border-accent bg-accent/12 ring-1 ring-accent' : 'border-line bg-white/70 hover:bg-white'}`}>{o.label}</button>))}
+      </div>
+      <p className="mt-2 text-[12.5px] text-ink2">{MKT_NOTE[t]}</p>
       <div className="mt-2 grid grid-cols-2 gap-2">
-        <div className="rounded-xl border border-line bg-white/60 p-3"><div className="text-[12px] text-ink2"><Term k="ios">IOS rent</Term> per acre, monthly</div><div className="display num text-[26px] font-semibold leading-tight">{money(m.iosRent)}</div><Spark values={g.marketHistory.map((x) => x.iosRent)} /></div>
-        <div className="rounded-xl border border-line bg-white/60 p-3"><div className="text-[12px] text-ink2">Industrial rent per SF, yearly <Term k="nnn">NNN</Term></div><div className="display num text-[26px] font-semibold leading-tight">${m.indRent.toFixed(2)}</div><Spark values={g.marketHistory.map((x) => x.indRent)} /></div>
+        <div className="rounded-xl border border-line bg-white/60 p-3"><div className="text-[12px] text-ink2">Metro rent, {unit}</div><div className="display num text-[26px] font-semibold leading-tight">{rentStr(metroRent(g, t))}</div><Spark values={hist} /></div>
+        <div className="rounded-xl border border-line bg-white/60 p-3 text-[13px]">
+          <Row label={<Term k="caprate">Cap rate</Term>} value={pct(typeCap(g, t), 2)} />
+          <Row label={<Term k="vacancy">Vacancy</Term>} value={`${pct(vac, 1)} · ${tight}`} />
+          <Row label={<Term k="absorption">Typical lease-up</Term>} value={`${leaseUpBase(t)} months`} />
+          <Row label={t === 'ios' ? 'Yard cost per land SF' : 'Build cost per SF'} value={`$${buildCost(g, t).toFixed(t === 'ios' ? 2 : 0)}`} />
+          <Row label={<Term k="hurdle">Spread for a C</Term>} value={`${Math.round(HURDLE[t] * 1e4)} bp`} />
+        </div>
       </div>
       {g.difficulty === 'pro' && (
         <div className="mt-2 flex items-center justify-between rounded-xl border border-line bg-white/60 p-3">
@@ -194,31 +218,29 @@ function Market({ g }: { g: Game }) {
           <div className="text-right"><div className="text-[12px] text-ink2"><Term k="floating">Base rate</Term></div><div className="display num text-[22px] font-semibold leading-tight">{pct(m.baseRate, 2)}</div></div>
         </div>
       )}
-      <Section title="Pricing">
-        <Row label={<><Term k="caprate">Cap rate</Term>, IOS</>} value={pct(m.iosCap, 2)} />
-        <Row label="Cap rate, industrial buildings" value={pct(m.indCap, 2)} />
+      <Section title="Metro-wide">
         <Row label="Land prices since 2027" value={pct(m.landIndex - 1, 1)} />
         <Row label="Construction costs since 2027" value={pct(m.costIndex - 1, 1)} />
       </Section>
-      <Section title="News">
-        <ul className="space-y-2">{g.news.slice(0, 14).map((n, i) => (<li key={i} className="grid grid-cols-[8px_1fr] gap-2 text-[13px]"><i className={`mt-1.5 h-2 w-2 rounded-full ${n.tone === 'good' ? 'bg-good' : n.tone === 'bad' ? 'bg-bad' : 'bg-ink2/50'}`} /><span><span className="num text-[11.5px] text-ink2">{dateStr(n.day)}</span><br />{n.text}</span></li>))}</ul>
-      </Section>
-      <Section title="Districts">
-        <p className="mb-2 text-[12.5px] text-ink2">Each district prices off the metro average. Rents and cap rates below are today's numbers; approval shows how much harder or easier hearings are.</p>
-        <div className="space-y-1.5">{Object.values(DISTRICTS).map((d) => {
-          const open = g.parcels.filter((p) => p.district === d.id && p.status === 'available' && (!p.offMarket || g.npcs.find((n) => n.id === 'dusty')!.rel >= 60)).length;
-          const [x, y] = ll(d.at[0], d.at[1]);
+      <Section title={`Districts: ${MKT_TABS.find((o) => o.value === t)!.label.toLowerCase()}`}>
+        <p className="mb-2 text-[12.5px] text-ink2">Each district prices off the metro average for this property type. Sorted by rent, highest first. Tap one to fly there.</p>
+        <div className="space-y-1.5">{Object.values(DISTRICTS).sort((a, b) => b.rent[t] - a.rent[t]).map((d) => {
+          const open = g.parcels.filter((p) => p.district === d.id && p.status === 'available' && !p.existing && (p.fit ?? []).includes(t) && (!p.offMarket || g.npcs.find((n) => n.id === 'dusty')!.rel >= 60)).length;
+          const [x, y] = ll(d.at[0], d.at[1]), dm = d.demand[t];
           return (
             <button key={d.id} type="button" onClick={() => focusOn(x, y, 0.75)} className="w-full rounded-xl border border-line bg-white/60 p-2.5 text-left hover:bg-white">
-              <div className="flex items-baseline justify-between gap-2"><span className="text-[13.5px] font-semibold">{d.name}</span><span className="num shrink-0 text-[12px] text-ink2">{open} site{open === 1 ? '' : 's'} for sale</span></div>
-              <div className="text-[12px] text-ink2">{d.blurb}</div>
+              <div className="flex items-baseline justify-between gap-2"><span className="text-[13.5px] font-semibold">{d.name}</span><span className="num shrink-0 text-[12px] text-ink2">{open} site{open === 1 ? '' : 's'} that suit</span></div>
               <div className="num mt-1 grid grid-cols-4 gap-1 text-[12px]">
-                <span>Yard {money(m.iosRent * d.ios)}/ac</span><span>Bldg ${(m.indRent * d.ind).toFixed(2)}/SF</span><span>Cap {pct(m.indCap + d.cap, 2)}</span>
-                <span className={d.ent < -0.06 ? 'text-bad' : d.ent > 0 ? 'text-good' : ''}>Approval {d.ent === 0 ? 'average' : `${d.ent > 0 ? '+' : ''}${Math.round(d.ent * 100)} pts`}</span>
+                <span>Rent {rentStr(districtRent(g, d.id, t))}</span><span>Cap {pct(capFor(g, d.id, t), 2)}</span><span>Empty {pct(vacancyFor(g, d.id, t), 0)}</span>
+                <span className={dm < 0.85 ? 'text-bad' : dm > 1.05 ? 'text-good' : ''}>Demand {dm < 0.85 ? 'weak' : dm > 1.05 ? 'strong' : 'average'}</span>
               </div>
+              {(t === 'ios' || t === 'spec') && <div className={`num mt-0.5 text-[12px] ${d.ent < -0.06 ? 'text-bad' : d.ent > 0 ? 'text-good' : 'text-ink2'}`}>Approvals {d.ent === 0 ? 'average' : `${d.ent > 0 ? '+' : ''}${Math.round(d.ent * 100)} pts`}</div>}
             </button>
           );
         })}</div>
+      </Section>
+      <Section title="News">
+        <ul className="space-y-2">{g.news.slice(0, 14).map((n, i) => (<li key={i} className="grid grid-cols-[8px_1fr] gap-2 text-[13px]"><i className={`mt-1.5 h-2 w-2 rounded-full ${n.tone === 'good' ? 'bg-good' : n.tone === 'bad' ? 'bg-bad' : 'bg-ink2/50'}`} /><span><span className="num text-[11.5px] text-ink2">{dateStr(n.day)}</span><br />{n.text}</span></li>))}</ul>
       </Section>
     </>
   );
