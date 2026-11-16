@@ -1,5 +1,6 @@
 // True 3D metro map (WebGL via three.js): lit, shadowed, with a camera you can pan, zoom, rotate and tilt.
 // One tile is one world unit. X runs east, Z runs south, Y is up.
+import { loadKit, type Kit } from './kit';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -150,6 +151,14 @@ export class Map3D {
   private drag: { x: number; y: number; moved: number; pinch: number; twist: number; mini: boolean; rotate: boolean } | null = null;
   private sites = new Map<string, { key: string; model: SiteModel; frame: THREE.Group; frameKey: string }>();
   private near: THREE.Object3D[] = []; // scenery hidden when far away
+  // close-up detail: kit models stand in for the simple shapes in the few tiles around the camera
+  private kit: Kit | null = null;
+  private swap = new Map<number, { kind: string; mesh: THREE.InstancedMesh; idx: number; m: THREE.Matrix4; it: number[] }[]>();
+  private hidden: { mesh: THREE.InstancedMesh; idx: number; m: THREE.Matrix4 }[] = [];
+  private detail: Partial<Record<keyof Kit, THREE.InstancedMesh[]>> = {};
+  private detailKey = 'off'; private detailR = 0;
+  private treeMat: THREE.MeshStandardMaterial | null = null; private groundMat: THREE.MeshStandardMaterial | null = null;
+  private season = 2;
   private flood!: THREE.InstancedMesh;
   private trucks: { road: number; t: number; speed: number; dir: 1 | -1 }[] = [];
   private truckBody!: THREE.InstancedMesh; private truckCab!: THREE.InstancedMesh;
@@ -178,6 +187,8 @@ export class Map3D {
     try { this.setupPost(); } catch { this.composer = null; }
 
     this.buildGround(); this.buildScenery(); this.buildTraffic(); this.buildLife();
+    // the single-file preview has no model files beside it, so it keeps the built-in shapes
+    if (!__LOCAL_ONLY__) void loadKit(import.meta.env.BASE_URL).then((k) => { if (k) { this.kit = k; this.buildDetail(k); } });
     canvas.addEventListener('pointerdown', this.down); canvas.addEventListener('pointermove', this.move);
     canvas.addEventListener('pointerup', this.up); canvas.addEventListener('pointercancel', this.up);
     canvas.addEventListener('pointerleave', () => { this.hover = null; });
@@ -224,7 +235,7 @@ export class Map3D {
   private buildGround() {
     const max = this.renderer.capabilities.maxTextureSize;
     const tex = new THREE.CanvasTexture(paintGround(max >= 4096 ? 4096 : 2048)); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(W, H).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ map: tex, roughness: 1, normalMap: normalTex(512, (u, v) => fbm(u * 26, v * 20, 31), 26, false), normalScale: new THREE.Vector2(0.4, 0.4) }));
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(W, H).rotateX(-Math.PI / 2), (this.groundMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 1, normalMap: normalTex(512, (u, v) => fbm(u * 26, v * 20, 31), 26, false), normalScale: new THREE.Vector2(0.4, 0.4) })));
     ground.position.set(W / 2, 0, H / 2); ground.receiveShadow = true; this.scene.add(ground);
     // a fine-grain layer keeps the ground crisp up close, where the big texture runs out of pixels
     const grain = canvasTex(256, 256, (c) => { c.clearRect(0, 0, 256, 256); for (let i = 0; i < 5200; i++) { const dark = i % 3 !== 0; c.fillStyle = dark ? `rgba(60,80,35,${0.1 + hash(i, 1, 2) * 0.22})` : `rgba(235,225,170,${0.08 + hash(i, 2, 2) * 0.2})`; const x = hash(i, 3, 2) * 256, y = hash(i, 4, 2) * 256; if (i % 5 === 0) { c.fillRect(x, y, 1.2, 4 + hash(i, 5, 2) * 5); } else c.fillRect(x, y, 1.5 + hash(i, 6, 2) * 2.5, 1.5 + hash(i, 7, 2) * 2.5); } }, true);
@@ -367,7 +378,7 @@ export class Map3D {
     const geo: Record<string, { g: THREE.BufferGeometry; m: THREE.Material | THREE.Material[]; near: boolean; shadow: boolean }> = {
       house: { g: UNIT, m: mat('#ffffff'), near: true, shadow: true },
       roof: { g: new THREE.ConeGeometry(0.707, 1, 4).rotateY(Math.PI / 4).translate(0, 0, 0), m: mat('#ffffff', { rough: 0.95 }), near: true, shadow: true },
-      tree: { g: new THREE.IcosahedronGeometry(0.5, 1).translate(0, 0.1, 0), m: mat('#ffffff', { rough: 1 }), near: true, shadow: true },
+      tree: { g: new THREE.IcosahedronGeometry(0.5, 1).translate(0, 0.1, 0), m: (this.treeMat = mat('#ffffff', { rough: 1 }) as THREE.MeshStandardMaterial), near: true, shadow: true },
       ware: { g: UNIT, m: [wall, wall, roof, roof, dock, wall], near: false, shadow: true },
       tower: { g: UNIT, m: [glass, glass, cap, cap, glass, glass], near: false, shadow: true },
       silo: { g: new THREE.CylinderGeometry(0.5, 0.5, 1, 10), m: mat('#ffffff', { metal: 0.4, rough: 0.5 }), near: true, shadow: true },
@@ -382,11 +393,78 @@ export class Map3D {
     const o = new THREE.Object3D(), col = new THREE.Color();
     for (const c of chunks.values()) for (const kind of Object.keys(c)) {
       const items = c[kind], def = geo[kind], im = new THREE.InstancedMesh(def.g, def.m, items.length);
-      items.forEach(([x, y, z, w, h, d, r, color], i) => { o.position.set(x, y + h / 2, z); o.scale.set(w, h, d); o.rotation.set(0, r, 0); o.updateMatrix(); im.setMatrixAt(i, o.matrix); im.setColorAt(i, col.set(color)); });
+      const swappable = kind === 'house' || kind === 'roof' || kind === 'tree' || kind === 'pine' || kind === 'ware';
+      items.forEach(([x, y, z, w, h, d, r, color], i) => {
+        o.position.set(x, y + h / 2, z); o.scale.set(w, h, d); o.rotation.set(0, r, 0); o.updateMatrix(); im.setMatrixAt(i, o.matrix); im.setColorAt(i, col.set(color));
+        if (swappable) { const key = Math.floor(z) * W + Math.floor(x); (this.swap.get(key) ?? this.swap.set(key, []).get(key)!).push({ kind, mesh: im, idx: i, m: o.matrix.clone(), it: [x, y, z, w, h, d, r] }); }
+      });
       im.castShadow = def.shadow; im.receiveShadow = def.m !== GLOW && def.m !== GLOW_RED; im.computeBoundingSphere();
       if (def.near) this.near.push(im);
       this.scene.add(im);
     }
+  }
+
+  /** Instanced meshes for the kit models, sized for the busiest neighbourhood the detail ring can cover. */
+  private buildDetail(kit: Kit) {
+    const CAP: Record<keyof Kit, number> = { house: 260, ware: 60, tree: 520, fall: 420, pine: 260, car: 160 };
+    const TINT = ['#ffffff', '#f2ead8', '#e6eef2', '#f6efe4', '#e9e2d2', '#dfe8ea'], col = new THREE.Color();
+    for (const g of Object.keys(kit) as (keyof Kit)[]) {
+      this.detail[g] = kit[g].map((m) => {
+        const im = new THREE.InstancedMesh(m.geo, m.mat, CAP[g]);
+        im.count = 0; im.frustumCulled = false; im.castShadow = true; im.receiveShadow = true; im.visible = false;
+        if (g === 'car' || g === 'house') for (let i = 0; i < CAP[g]; i++) im.setColorAt(i, col.set(TINT[Math.floor(hash(i, m.geo.id, 7) * TINT.length)]));
+        this.scene.add(im);
+        return im;
+      });
+    }
+    this.detailKey = 'stale'; if (this.groundMat) this.groundMat.userData.seasoned = false;
+  }
+  /** Swap the simple shapes for kit models in the tiles around the camera, and put the simple ones back as it moves on. */
+  private updateDetail(lv: string, c: { tx: number; tz: number; dist: number }) {
+    const kit = this.kit;
+    if (!kit) return;
+    const on = lv !== 'low' && c.dist < 13 && this.started, R = lv === 'high' ? 5 : 3.5, cx = Math.floor(c.tx), cz = Math.floor(c.tz);
+    const key = on ? `${cx},${cz},${R},${this.season}` : 'off';
+    if (key === this.detailKey) return;
+    this.detailKey = key; this.detailR = on ? R : 0;
+    const touched = new Set<THREE.InstancedMesh>(), ZERO = new THREE.Matrix4().makeScale(0, 0, 0), o = new THREE.Object3D();
+    for (const e of this.hidden) { e.mesh.setMatrixAt(e.idx, e.m); touched.add(e.mesh); }
+    this.hidden = [];
+    for (const list of Object.values(this.detail)) for (const im of list ?? []) im.count = 0;
+    if (on) {
+      const put = (group: keyof Kit, v: number, x: number, z: number, rot: number, sx: number, sy: number, sz: number) => {
+        const im = this.detail[group]![v % this.detail[group]!.length];
+        if (im.count >= im.instanceMatrix.count) return false;
+        o.position.set(x, 0.004, z); o.rotation.set(0, rot, 0); o.scale.set(sx, sy, sz); o.updateMatrix(); im.setMatrixAt(im.count++, o.matrix);
+        return true;
+      };
+      for (let tz = cz - Math.ceil(R); tz <= cz + Math.ceil(R); tz++) for (let tx = cx - Math.ceil(R); tx <= cx + Math.ceil(R); tx++) {
+        if (tx < 0 || tz < 0 || tx >= W || tz >= H || Math.hypot(tx - cx, tz - cz) > R) continue;
+        for (const e of this.swap.get(tz * W + tx) ?? []) {
+          const [x, , z, w, h, d, r] = e.it, v = Math.floor(hash(Math.round(x * 97), Math.round(z * 89), 5) * 60);
+          let ok = true;
+          if (e.kind === 'house') { const s = Math.max(w, d) * 1.55; ok = put('house', v, x, z, r + Math.floor(hash(Math.round(x * 31), Math.round(z * 37), 6) * 2) * Math.PI, s, s, s); }
+          else if (e.kind === 'ware') { const m = kit.ware[v % kit.ware.length]; ok = put('ware', v, x, z, r, w / m.sx, (Math.max(h * 2.4, Math.min(w, d) * 0.55)) / m.h, d / m.sz); }
+          else if (e.kind === 'tree') { const fall = this.season === 3 && v % 10 < 7, group = fall ? 'fall' : 'tree', m = kit[group][v % kit[group].length], s = (h * 1.45 + 0.02) / m.h; ok = put(group, v, x, z, v, s, s, s); }
+          else if (e.kind === 'pine') { const m = kit.pine[v % kit.pine.length], s = (h * 1.25 + 0.02) / m.h; ok = put('pine', v, x, z, v, s, s, s); }
+          if (!ok) continue; // out of room for this model: leave the simple shape in place
+          e.mesh.setMatrixAt(e.idx, ZERO); touched.add(e.mesh); this.hidden.push(e);
+        }
+      }
+    }
+    for (const m of touched) m.instanceMatrix.needsUpdate = true;
+    for (const [g, list] of Object.entries(this.detail)) if (g !== 'car') for (const im of list ?? []) { im.visible = im.count > 0; im.instanceMatrix.needsUpdate = true; }
+  }
+  /** Winter, spring, summer or autumn from the game calendar: the grass and the trees change with it. */
+  private applySeason() {
+    const day = this.view.game?.day ?? 180, month = Math.floor(day / 30) % 12, s = month === 11 || month < 2 ? 0 : month < 5 ? 1 : month < 9 ? 2 : 3;
+    if (s === this.season && this.groundMat?.userData.seasoned) return;
+    this.season = s;
+    const GROUND = ['#e6d9b8', '#f4ffe6', '#ffffff', '#f3e6c4'], TREES = ['#b9a384', '#eaffd8', '#ffffff', '#e9b46a'];
+    if (this.groundMat) { this.groundMat.color.set(GROUND[s]); this.groundMat.userData.seasoned = true; }
+    this.treeMat?.color.set(TREES[s]);
+    // bare, grey-brown crowns in winter for the close-up trees too
+    for (const g of ['tree', 'fall'] as const) for (const m of this.kit?.[g] ?? []) for (const mt of m.mat) { const sm = mt as THREE.MeshStandardMaterial; sm.userData.base ??= sm.color.clone(); sm.color.copy(sm.userData.base as THREE.Color).multiply(new THREE.Color(s === 0 ? '#b7a68c' : '#ffffff')); }
   }
 
   private buildTraffic() {
@@ -442,6 +520,7 @@ export class Map3D {
   private moveLife(dt: number, t: number, near: boolean) {
     const o = new THREE.Object3D(), night = this.atmos.night > 0.3 && near && this.cam.dist < 30;
     this.carBody.visible = this.carTop.visible = near; this.headLights.visible = this.tailLights.visible = night;
+    if (!near) for (const im of this.detail.car ?? []) im.visible = false;
     if (near) {
       let li = 0;
       const lamp = (px: number, pz: number, a: number, half: number, y: number) => {
@@ -450,15 +529,21 @@ export class Map3D {
         o.position.set(px + Math.sin(a) * half, y, pz + Math.cos(a) * half); o.scale.set(0.02, 0.006, 0.006); o.updateMatrix(); this.headLights.setMatrixAt(li, o.matrix);
         o.position.set(px - Math.sin(a) * half, y, pz - Math.cos(a) * half); o.scale.set(0.02, 0.005, 0.004); o.updateMatrix(); this.tailLights.setMatrixAt(li, o.matrix); li++;
       };
+      const models = this.detailR > 0 ? this.detail.car : undefined, R = this.detailR;
+      for (const im of this.detail.car ?? []) im.count = 0;
       this.cars.forEach((cr, i) => {
         cr.t = (cr.t + cr.speed * dt * cr.dir + 1) % 1;
         const [x, z, ang] = this.along(cr.road, cr.t), a = cr.dir === 1 ? ang : ang + Math.PI, px = x + Math.cos(a) * cr.lane, pz = z - Math.sin(a) * cr.lane;
-        o.rotation.set(0, a, 0); o.position.set(px, 0.034, pz); o.scale.set(0.02, 0.011, 0.046); o.updateMatrix(); this.carBody.setMatrixAt(i, o.matrix);
-        o.position.set(px - Math.sin(a) * 0.003, 0.043, pz - Math.cos(a) * 0.003); o.scale.set(0.017, 0.009, 0.024); o.updateMatrix(); this.carTop.setMatrixAt(i, o.matrix);
+        // close to the camera a real car model takes the place of the two boxes
+        const im = models && Math.abs(px - this.cam.tx) < R && Math.abs(pz - this.cam.tz) < R ? models[i % models.length] : null, real = !!im && im.count < im.instanceMatrix.count;
+        if (real) { o.rotation.set(0, a, 0); o.position.set(px, 0.024, pz); o.scale.setScalar(0.052); o.updateMatrix(); im!.setMatrixAt(im!.count++, o.matrix); }
+        o.rotation.set(0, a, 0); o.position.set(px, 0.034, pz); o.scale.set(0.02, 0.011, 0.046); if (real) o.scale.setScalar(0); o.updateMatrix(); this.carBody.setMatrixAt(i, o.matrix);
+        o.position.set(px - Math.sin(a) * 0.003, 0.043, pz - Math.cos(a) * 0.003); o.scale.set(0.017, 0.009, 0.024); if (real) o.scale.setScalar(0); o.updateMatrix(); this.carTop.setMatrixAt(i, o.matrix);
         lamp(px, pz, a, 0.024, 0.034);
       });
       if (night) this.trucks.forEach((tr) => { const [x, z, ang] = this.along(tr.road, tr.t), a = tr.dir === 1 ? ang : ang + Math.PI; lamp(x + Math.cos(a) * 0.055 + Math.sin(a) * 0.02, z - Math.sin(a) * 0.055 + Math.cos(a) * 0.02, a, 0.086, 0.04); });
       this.carBody.instanceMatrix.needsUpdate = this.carTop.instanceMatrix.needsUpdate = true;
+      for (const im of this.detail.car ?? []) { im.visible = im.count > 0; im.instanceMatrix.needsUpdate = true; }
       if (night) { this.headLights.count = this.tailLights.count = li; this.headLights.instanceMatrix.needsUpdate = this.tailLights.instanceMatrix.needsUpdate = true; }
     }
     this.trainMesh.visible = this.cam.dist < 70;
@@ -661,6 +746,8 @@ export class Map3D {
     for (const o of this.near) o.visible = c.dist < 60;
     this.flood.visible = this.view.overlay === 'flood';
 
+    this.applySeason();
+    this.updateDetail(lv, c);
     this.syncSites();
     for (const s of this.sites.values()) s.model.anim?.(t);
     if (this.pulseRing?.parent) { const q = (t % 1.6) / 1.6; this.pulseRing.scale.setScalar(1 + q * 0.9); (this.pulseRing.userData.m as THREE.MeshBasicMaterial).opacity = 1 - q; }
